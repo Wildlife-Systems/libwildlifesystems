@@ -1,4 +1,4 @@
-# ws-utils - WildlifeSystems shared sensor utilities
+# libwildlifesystems - WildlifeSystems shared sensor utilities
 # Static library for common sensor driver functionality
 
 CC = gcc
@@ -7,15 +7,15 @@ CFLAGS = -Wall -Wextra -Werror -std=c99 -O2 -fPIC
 ARFLAGS = rcs
 
 # Version from debian/changelog
-VERSION := $(shell head -1 debian/changelog | sed -n 's/.*(\([^)]*\)).*/\1/p')
-CFLAGS += -DVERSION=\"$(VERSION)\"
+VERSION := $(shell dpkg-parsechangelog -S Version 2>/dev/null || echo "1.0.0")
+CFLAGS += -DVERSION="$(VERSION)"
 
 # Directories
 SRCDIR = src
 BUILDDIR = build
 
 # Library name
-LIB = libws_utils.a
+LIB = libwildlifesystems.a
 
 # Source and object files
 SRC = $(SRCDIR)/ws_utils.c
