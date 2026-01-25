@@ -1,0 +1,23 @@
+Source: libwildlifesystems
+Section: libs
+Priority: optional
+Maintainer: Wildlife Systems <info@wildlifesystems.org>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+Homepage: https://github.com/wildlifesystems/libwildlifesystems
+
+Package: libwildlifesystems-dev
+Section: libdevel
+Architecture: any
+Depends: ${misc:Depends}
+Description: WildlifeSystems shared sensor utilities - development files
+ Static library and headers providing common functionality for
+ WildlifeSystems sensor drivers including:
+  - JSON string escaping and field replacement
+  - sc-prototype interaction for JSON templates
+  - Common command handling (identify, list, version)
+  - GPIO pin validation
+  - Raspberry Pi serial number retrieval
+ .
+ This package contains the static library and header files needed
+ to develop sensor drivers using ws-utils.
