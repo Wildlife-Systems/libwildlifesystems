@@ -1,11 +1,5 @@
 libwildlifesystems (1.0.0) bookworm; urgency=medium
 
   * Initial release
-  * JSON utilities: ws_json_escape_string, ws_json_replace_null_*
-  * Prototype caching: ws_get_sc_prototype, ws_get_prototype_cached
-  * Command handlers: ws_cmd_identify, ws_cmd_list_single, ws_cmd_list_multiple
-  * System utilities: ws_get_serial_number, ws_validate_gpio_pin
-  * Standard exit codes: WS_EXIT_SUCCESS, WS_EXIT_IDENTIFY, WS_EXIT_INVALID_ARG
-  * Location filter enum: WS_LOCATION_ALL, WS_LOCATION_INTERNAL, WS_LOCATION_EXTERNAL
 
- -- Ed Baker <edwbaker@gmail.com>  Sat, 25 Jan 2026 12:00:00 +0000
+ -- Ed Baker <edwbaker@gmail.com>  Sun, 25 Jan 2026 12:00:00 +0000
