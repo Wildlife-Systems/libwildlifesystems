@@ -753,7 +753,6 @@ int ws_build_sensor_json_base(char *output, size_t output_len,
                                const char *sensor_id, const char *sensor_name,
                                bool internal, time_t timestamp) {
     const char *prototype;
-    char timestamp_str[32];
     
     if (!output || output_len == 0) return -1;
     
@@ -780,9 +779,8 @@ int ws_build_sensor_json_base(char *output, size_t output_len,
     
     ws_json_replace_null_bool(output, "internal", internal);
     
-    /* Add timestamp */
-    ws_format_timestamp(timestamp_str, sizeof(timestamp_str), timestamp);
-    ws_json_replace_null_string(output, "timestamp", timestamp_str);
+    /* Add timestamp as integer */
+    ws_json_replace_null_int(output, "timestamp", (long)timestamp);
     
     return 0;
 }

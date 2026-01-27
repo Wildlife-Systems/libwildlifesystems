@@ -1,3 +1,9 @@
+libwildlifesystems (1.1.1) stable; urgency=medium
+
+  * Fix timestamp output as integer instead of string
+
+ -- Ed Baker <edwbaker@gmail.com>  Tue, 27 Jan 2026 14:00:00 +0000
+
 libwildlifesystems (1.1.0) stable; urgency=medium
 
   * Add logging: ws_log_init, ws_log_error, ws_log_warning, ws_log_info
