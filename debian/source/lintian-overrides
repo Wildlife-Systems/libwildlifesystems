@@ -1,2 +1,3 @@
 # We use 'stable' for our own APT repository
 libwildlifesystems source: bad-distribution-in-changes-file stable
+libwildlifesystems-dev: bad-distribution-in-changes-file stable
