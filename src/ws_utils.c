@@ -13,11 +13,82 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <syslog.h>
 #include "ws_utils.h"
 
 /* Cached prototype from sc-prototype */
 static char *g_prototype_cache = NULL;
 static bool g_prototype_loaded = false;
+
+/* ============================================================================
+ * Logging Functions
+ * ============================================================================ */
+
+/*
+ * Initialize syslog for a sensor program.
+ */
+void ws_log_init(const char *program_name) {
+    openlog(program_name, LOG_PID | LOG_NDELAY, LOG_USER);
+}
+
+/*
+ * Log an error to both stderr and syslog.
+ */
+void ws_log_error(const char *fmt, ...) {
+    va_list args;
+    char buf[512];
+    
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    
+    fprintf(stderr, "Error: %s\n", buf);
+    syslog(LOG_ERR, "%s", buf);
+}
+
+/*
+ * Log a warning to both stderr and syslog.
+ */
+void ws_log_warning(const char *fmt, ...) {
+    va_list args;
+    char buf[512];
+    
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    
+    fprintf(stderr, "Warning: %s\n", buf);
+    syslog(LOG_WARNING, "%s", buf);
+}
+
+/*
+ * Log an info message to syslog only.
+ */
+void ws_log_info(const char *fmt, ...) {
+    va_list args;
+    char buf[512];
+    
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    
+    syslog(LOG_INFO, "%s", buf);
+}
+
+/* ============================================================================
+ * Base Config Functions
+ * ============================================================================ */
+
+/*
+ * Free a base sensor config's string fields.
+ */
+void ws_sensor_config_free_fields(ws_sensor_config_base_t *config) {
+    if (!config) return;
+    free(config->sensor_id);
+    free(config->sensor_name);
+    config->sensor_id = NULL;
+    config->sensor_name = NULL;
+}
 
 /*
  * Escape a string for safe inclusion in JSON output.
@@ -282,4 +353,595 @@ bool ws_validate_gpio_pin(int pin) {
 void ws_print_version(const char *program_name, const char *version) {
     printf("%s version %s\n", program_name, version);
     printf("Copyright (C) 2024 Wildlife Systems\n");
+}
+
+/*
+ * Read entire file into malloc'd buffer.
+ * Returns NULL on error. Caller must free the returned buffer.
+ */
+char *ws_read_file(const char *path, size_t *size_out) {
+    FILE *fp;
+    char *buffer;
+    long file_size;
+    size_t bytes_read;
+    
+    if (size_out) *size_out = 0;
+    
+    fp = fopen(path, "r");
+    if (!fp) return NULL;
+    
+    fseek(fp, 0, SEEK_END);
+    file_size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    
+    if (file_size <= 0) {
+        fclose(fp);
+        return NULL;
+    }
+    
+    buffer = malloc(file_size + 1);
+    if (!buffer) {
+        fclose(fp);
+        return NULL;
+    }
+    
+    bytes_read = fread(buffer, 1, file_size, fp);
+    buffer[bytes_read] = '\0';
+    fclose(fp);
+    
+    if (size_out) *size_out = bytes_read;
+    return buffer;
+}
+
+/*
+ * Count JSON objects in a buffer by counting '{' characters.
+ */
+int ws_json_count_objects(const char *buffer) {
+    int count = 0;
+    const char *ptr = buffer;
+    
+    if (!buffer) return 0;
+    
+    while ((ptr = strchr(ptr, '{')) != NULL) {
+        count++;
+        ptr++;
+    }
+    return count;
+}
+
+/*
+ * Parse a JSON string field from a JSON object.
+ */
+char *ws_json_parse_string(const char *ptr, const char *end, const char *field) {
+    char search[128];
+    char *field_ptr;
+    char *quote_start;
+    char *quote_end;
+    
+    if (!ptr || !end || !field) return NULL;
+    
+    snprintf(search, sizeof(search), "\"%s\"", field);
+    field_ptr = strstr(ptr, search);
+    
+    if (!field_ptr || field_ptr >= end) return NULL;
+    
+    field_ptr = strchr(field_ptr, ':');
+    if (!field_ptr || field_ptr >= end) return NULL;
+    
+    quote_start = strchr(field_ptr, '"');
+    if (!quote_start || quote_start >= end) return NULL;
+    
+    quote_start++;
+    quote_end = strchr(quote_start, '"');
+    if (!quote_end || quote_end > end) return NULL;
+    
+    return strndup(quote_start, quote_end - quote_start);
+}
+
+/*
+ * Parse a JSON boolean field from a JSON object.
+ */
+bool ws_json_parse_bool(const char *ptr, const char *end, const char *field, bool default_val) {
+    char search[128];
+    char *field_ptr;
+    char *colon;
+    
+    if (!ptr || !end || !field) return default_val;
+    
+    snprintf(search, sizeof(search), "\"%s\"", field);
+    field_ptr = strstr(ptr, search);
+    
+    if (!field_ptr || field_ptr >= end) return default_val;
+    
+    colon = strchr(field_ptr, ':');
+    if (!colon || colon >= end) return default_val;
+    
+    colon++;
+    while (*colon == ' ' || *colon == '\t') colon++;
+    
+    if (colon >= end) return default_val;
+    
+    if (strncmp(colon, "true", 4) == 0) return true;
+    if (strncmp(colon, "false", 5) == 0) return false;
+    
+    return default_val;
+}
+
+/*
+ * Parse a JSON integer field from a JSON object.
+ */
+int ws_json_parse_int(const char *ptr, const char *end, const char *field, int default_val) {
+    char search[128];
+    char *field_ptr;
+    char *colon;
+    
+    if (!ptr || !end || !field) return default_val;
+    
+    snprintf(search, sizeof(search), "\"%s\"", field);
+    field_ptr = strstr(ptr, search);
+    
+    if (!field_ptr || field_ptr >= end) return default_val;
+    
+    colon = strchr(field_ptr, ':');
+    if (!colon || colon >= end) return default_val;
+    
+    colon++;
+    while (*colon == ' ' || *colon == '\t') colon++;
+    
+    if (colon >= end) return default_val;
+    
+    return atoi(colon);
+}
+
+/*
+ * Get serial number with suffix appended.
+ */
+char *ws_get_serial_with_suffix(const char *suffix) {
+    char *raw_serial;
+    char *result;
+    size_t len;
+    
+    if (!suffix) return NULL;
+    
+    raw_serial = ws_get_serial_number();
+    if (!raw_serial) return NULL;
+    
+    len = strlen(raw_serial) + strlen(suffix) + 2;
+    result = malloc(len);
+    if (!result) {
+        free(raw_serial);
+        return NULL;
+    }
+    
+    snprintf(result, len, "%s_%s", raw_serial, suffix);
+    free(raw_serial);
+    return result;
+}
+
+/* ============================================================================
+ * JSON Builder Functions
+ * ============================================================================ */
+
+/*
+ * Initialize a JSON builder with a buffer.
+ */
+void ws_json_builder_init(ws_json_builder_t *builder, char *buffer, size_t capacity) {
+    if (!builder || !buffer || capacity == 0) return;
+    
+    builder->buffer = buffer;
+    builder->capacity = capacity;
+    builder->length = 0;
+    builder->field_count = 0;
+    builder->error = 0;
+    buffer[0] = '\0';
+}
+
+/*
+ * Append to the builder buffer with overflow checking.
+ */
+static void builder_append(ws_json_builder_t *builder, const char *str) {
+    size_t str_len;
+    
+    if (!builder || builder->error || !str) return;
+    
+    str_len = strlen(str);
+    if (builder->length + str_len >= builder->capacity) {
+        builder->error = 1;
+        return;
+    }
+    
+    memcpy(builder->buffer + builder->length, str, str_len + 1);
+    builder->length += str_len;
+}
+
+/*
+ * Start a JSON object.
+ */
+void ws_json_builder_start(ws_json_builder_t *builder) {
+    if (!builder) return;
+    builder_append(builder, "{");
+    builder->field_count = 0;
+}
+
+/*
+ * End a JSON object.
+ */
+void ws_json_builder_end(ws_json_builder_t *builder) {
+    if (!builder) return;
+    builder_append(builder, "}");
+}
+
+/*
+ * Add comma separator if needed.
+ */
+static void builder_add_comma(ws_json_builder_t *builder) {
+    if (builder->field_count > 0) {
+        builder_append(builder, ",");
+    }
+    builder->field_count++;
+}
+
+/*
+ * Add a string field to the JSON object.
+ */
+void ws_json_builder_add_string(ws_json_builder_t *builder, const char *key, const char *value) {
+    char escaped[1024];
+    char field[1280];
+    
+    if (!builder || !key) return;
+    
+    builder_add_comma(builder);
+    
+    if (value) {
+        ws_json_escape_string(value, escaped, sizeof(escaped));
+        snprintf(field, sizeof(field), "\"%s\":\"%s\"", key, escaped);
+    } else {
+        snprintf(field, sizeof(field), "\"%s\":null", key);
+    }
+    
+    builder_append(builder, field);
+}
+
+/*
+ * Add an integer field to the JSON object.
+ */
+void ws_json_builder_add_int(ws_json_builder_t *builder, const char *key, long value) {
+    char field[256];
+    
+    if (!builder || !key) return;
+    
+    builder_add_comma(builder);
+    snprintf(field, sizeof(field), "\"%s\":%ld", key, value);
+    builder_append(builder, field);
+}
+
+/*
+ * Add a double field to the JSON object.
+ */
+void ws_json_builder_add_double(ws_json_builder_t *builder, const char *key, double value, int precision) {
+    char field[256];
+    char fmt[32];
+    
+    if (!builder || !key) return;
+    
+    builder_add_comma(builder);
+    snprintf(fmt, sizeof(fmt), "\"%%s\":%%.%df", precision);
+    snprintf(field, sizeof(field), fmt, key, value);
+    builder_append(builder, field);
+}
+
+/*
+ * Add a boolean field to the JSON object.
+ */
+void ws_json_builder_add_bool(ws_json_builder_t *builder, const char *key, bool value) {
+    char field[256];
+    
+    if (!builder || !key) return;
+    
+    builder_add_comma(builder);
+    snprintf(field, sizeof(field), "\"%s\":%s", key, value ? "true" : "false");
+    builder_append(builder, field);
+}
+
+/*
+ * Add a null field to the JSON object.
+ */
+void ws_json_builder_add_null(ws_json_builder_t *builder, const char *key) {
+    char field[256];
+    
+    if (!builder || !key) return;
+    
+    builder_add_comma(builder);
+    snprintf(field, sizeof(field), "\"%s\":null", key);
+    builder_append(builder, field);
+}
+
+/*
+ * Get the final JSON string.
+ */
+const char *ws_json_builder_get(ws_json_builder_t *builder) {
+    if (!builder || builder->error) return NULL;
+    return builder->buffer;
+}
+
+/* ============================================================================
+ * JSON Array Builder Functions
+ * ============================================================================ */
+
+/*
+ * Append to array builder buffer with overflow checking.
+ */
+static void array_append(ws_json_array_builder_t *builder, const char *str) {
+    size_t str_len;
+    
+    if (!builder || builder->error || !str) return;
+    
+    str_len = strlen(str);
+    if (builder->length + str_len >= builder->capacity) {
+        builder->error = 1;
+        return;
+    }
+    
+    memcpy(builder->buffer + builder->length, str, str_len + 1);
+    builder->length += str_len;
+}
+
+/*
+ * Initialize a JSON array builder.
+ */
+void ws_json_array_init(ws_json_array_builder_t *builder, char *buffer, size_t capacity) {
+    if (!builder || !buffer || capacity == 0) return;
+    
+    builder->buffer = buffer;
+    builder->capacity = capacity;
+    builder->length = 0;
+    builder->item_count = 0;
+    builder->error = 0;
+    
+    /* Start with opening bracket */
+    buffer[0] = '[';
+    buffer[1] = '\0';
+    builder->length = 1;
+}
+
+/*
+ * Add an item to the JSON array.
+ */
+void ws_json_array_add(ws_json_array_builder_t *builder, const char *item) {
+    if (!builder || !item) return;
+    
+    if (builder->item_count > 0) {
+        array_append(builder, ",");
+    }
+    array_append(builder, item);
+    builder->item_count++;
+}
+
+/*
+ * Finalize the JSON array.
+ */
+void ws_json_array_end(ws_json_array_builder_t *builder) {
+    if (!builder) return;
+    array_append(builder, "]");
+}
+
+/*
+ * Get the final JSON array string.
+ */
+const char *ws_json_array_get(ws_json_array_builder_t *builder) {
+    if (!builder || builder->error) return NULL;
+    return builder->buffer;
+}
+
+/* ============================================================================
+ * Sensor JSON Helper Functions
+ * ============================================================================ */
+
+/*
+ * Format a Unix timestamp as a string.
+ */
+void ws_format_timestamp(char *buffer, size_t bufsize, time_t timestamp) {
+    if (!buffer || bufsize == 0) return;
+    snprintf(buffer, bufsize, "%ld", (long)timestamp);
+}
+
+/*
+ * Build base sensor JSON from sc-prototype template.
+ */
+int ws_build_sensor_json_base(char *output, size_t output_len,
+                               const char *sensor, const char *measures, const char *unit,
+                               const char *sensor_id, const char *sensor_name,
+                               bool internal, time_t timestamp) {
+    const char *prototype;
+    char timestamp_str[32];
+    
+    if (!output || output_len == 0) return -1;
+    
+    prototype = ws_get_prototype_cached();
+    if (!prototype || !*prototype) {
+        output[0] = '\0';
+        return -1;
+    }
+    
+    /* Start with a copy of the prototype */
+    strncpy(output, prototype, output_len - 1);
+    output[output_len - 1] = '\0';
+    
+    /* Replace common fields */
+    ws_json_replace_null_string(output, "sensor", sensor);
+    ws_json_replace_null_string(output, "measures", measures);
+    ws_json_replace_null_string(output, "unit", unit);
+    ws_json_replace_null_string(output, "sensor_id", sensor_id);
+    
+    /* Only set sensor_name if provided */
+    if (sensor_name && sensor_name[0] != '\0') {
+        ws_json_replace_null_string(output, "sensor_name", sensor_name);
+    }
+    
+    ws_json_replace_null_bool(output, "internal", internal);
+    
+    /* Add timestamp */
+    ws_format_timestamp(timestamp_str, sizeof(timestamp_str), timestamp);
+    ws_json_replace_null_string(output, "timestamp", timestamp_str);
+    
+    return 0;
+}
+
+/*
+ * Add value field to sensor JSON.
+ */
+void ws_sensor_json_set_value(char *json, double value, int precision) {
+    char value_str[64];
+    char fmt[16];
+    
+    if (!json) return;
+    
+    snprintf(fmt, sizeof(fmt), "%%.%df", precision);
+    snprintf(value_str, sizeof(value_str), fmt, value);
+    
+    /* Replace "value":null with "value":X.XX */
+    char search[] = "\"value\":null";
+    char replace[128];
+    snprintf(replace, sizeof(replace), "\"value\":%s", value_str);
+    
+    char *pos = strstr(json, search);
+    if (pos) {
+        size_t search_len = strlen(search);
+        size_t replace_len = strlen(replace);
+        size_t tail_len = strlen(pos + search_len);
+        memmove(pos + replace_len, pos + search_len, tail_len + 1);
+        memcpy(pos, replace, replace_len);
+    }
+}
+
+/*
+ * Add error field to sensor JSON and set value to null.
+ */
+void ws_sensor_json_set_error(char *json, const char *error_msg) {
+    char escaped[256];
+    
+    if (!json) return;
+    
+    /* Value stays as null (or we explicitly set it) */
+    /* Replace error:null with error:"message" */
+    if (error_msg) {
+        ws_json_escape_string(error_msg, escaped, sizeof(escaped));
+        ws_json_replace_null_string(json, "error", escaped);
+    }
+}
+
+/*
+ * Set the config field in sensor JSON to a custom JSON object.
+ */
+void ws_sensor_json_set_config(char *json, size_t json_capacity, const char *config_json) {
+    char *pos;
+    const char *search = "\"config\":null";
+    size_t search_len, config_len, tail_len;
+    
+    if (!json || !config_json) return;
+    
+    pos = strstr(json, search);
+    if (!pos) return;
+    
+    search_len = strlen(search);
+    config_len = strlen(config_json);
+    tail_len = strlen(pos + search_len);
+    
+    /* Check if we have enough space */
+    /* We're replacing "config":null with "config":<config_json> */
+    /* The "config": part stays (9 chars), null (4 chars) gets replaced */
+    size_t new_total = (pos - json) + 9 + config_len + tail_len + 1;
+    if (new_total > json_capacity) return;
+    
+    /* Move tail to make room */
+    memmove(pos + 9 + config_len, pos + search_len, tail_len + 1);
+    /* Copy config JSON */
+    memcpy(pos + 9, config_json, config_len);
+}
+
+/*
+ * Build a config JSON object with common fields.
+ */
+int ws_build_config_base(char *buffer, size_t bufsize, const char *version) {
+    if (!buffer || bufsize == 0) return 0;
+    
+    if (version) {
+        return snprintf(buffer, bufsize, "{\"software_version\":\"%s\"", version);
+    } else {
+        return snprintf(buffer, bufsize, "{");
+    }
+}
+
+/*
+ * Append a string field to a config JSON object.
+ */
+int ws_config_add_string(char *buffer, size_t bufsize, const char *key, const char *value) {
+    size_t current_len;
+    char append[256];
+    int append_len;
+    
+    if (!buffer || !key || !value) return 0;
+    
+    current_len = strlen(buffer);
+    if (current_len >= bufsize - 1) return 0;
+    
+    append_len = snprintf(append, sizeof(append), ",\"%s\":\"%s\"", key, value);
+    if (current_len + append_len >= bufsize) return 0;
+    
+    strcat(buffer, append);
+    return append_len;
+}
+
+/*
+ * Append an integer field to a config JSON object.
+ */
+int ws_config_add_int(char *buffer, size_t bufsize, const char *key, long value) {
+    size_t current_len;
+    char append[128];
+    int append_len;
+    
+    if (!buffer || !key) return 0;
+    
+    current_len = strlen(buffer);
+    if (current_len >= bufsize - 1) return 0;
+    
+    append_len = snprintf(append, sizeof(append), ",\"%s\":%ld", key, value);
+    if (current_len + append_len >= bufsize) return 0;
+    
+    strcat(buffer, append);
+    return append_len;
+}
+
+/*
+ * Append a nested JSON object to a config JSON object.
+ */
+int ws_config_add_object(char *buffer, size_t bufsize, const char *key, const char *object_json) {
+    size_t current_len;
+    char append[1024];
+    int append_len;
+    
+    if (!buffer || !key || !object_json) return 0;
+    
+    current_len = strlen(buffer);
+    if (current_len >= bufsize - 1) return 0;
+    
+    append_len = snprintf(append, sizeof(append), ",\"%s\":%s", key, object_json);
+    if (current_len + append_len >= bufsize) return 0;
+    
+    strcat(buffer, append);
+    return append_len;
+}
+
+/*
+ * Close a config JSON object.
+ */
+void ws_config_end(char *buffer) {
+    size_t len;
+    
+    if (!buffer) return;
+    
+    len = strlen(buffer);
+    if (len > 0) {
+        strcat(buffer, "}");
+    }
 }
