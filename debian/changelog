@@ -1,3 +1,17 @@
+libwildlifesystems (1.1.0) stable; urgency=medium
+
+  * Add logging functions: ws_log_init, ws_log_error, ws_log_warning, ws_log_info
+  * Add ws_sensor_config_base_t and ws_sensor_config_free_fields
+  * Add file reading: ws_read_file, ws_json_count_objects
+  * Add JSON parsing: ws_json_parse_string, ws_json_parse_bool, ws_json_parse_int
+  * Add ws_get_serial_with_suffix for sensor ID generation
+  * Add JSON builders: ws_json_builder_*, ws_json_array_*
+  * Add sensor JSON helpers: ws_build_sensor_json_base, ws_sensor_json_set_*
+  * Add config builders: ws_build_config_base, ws_config_add_*, ws_config_end
+  * Add unit tests with Unity framework
+
+ -- Ed Baker <edwbaker@gmail.com>  Mon, 27 Jan 2026 12:00:00 +0000
+
 libwildlifesystems (1.0.0) stable; urgency=medium
 
   * Initial release
