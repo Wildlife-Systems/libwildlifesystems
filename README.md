@@ -1,10 +1,11 @@
-# ws-utils
+# libwildlifesystems
 
 WildlifeSystems shared sensor utilities - a static library providing common functionality for sensor drivers.
 
 ## Features
 
 - **JSON utilities**: String escaping, null value replacement for strings, numbers, booleans
+- **JSON building**: Construct sensor JSON output with proper structure
 - **Prototype caching**: Integration with `sc-prototype` for JSON templates
 - **Command handlers**: Standard `identify`, `list`, and `version` command implementations
 - **System utilities**: GPIO pin validation, Raspberry Pi serial number retrieval
@@ -15,7 +16,7 @@ WildlifeSystems shared sensor utilities - a static library providing common func
 ### From Debian package
 
 ```bash
-sudo dpkg -i libws-utils-dev_1.0.0_armhf.deb
+sudo dpkg -i libwildlifesystems-dev_1.1.1_armhf.deb
 ```
 
 ### From source
@@ -79,8 +80,12 @@ typedef enum {
 | `ws_cmd_list_single()` | Handle list with one measurement (exits) |
 | `ws_cmd_list_multiple()` | Handle list with multiple measurements (exits) |
 | `ws_get_serial_number()` | Get Pi serial number (caller frees) |
+| `ws_get_serial_with_suffix()` | Get Pi serial with suffix (caller frees) |
 | `ws_validate_gpio_pin()` | Validate GPIO pin (2-27) |
 | `ws_print_version()` | Print version information |
+| `ws_build_sensor_json_base()` | Build base sensor JSON structure |
+| `ws_sensor_json_set_value()` | Set the value field in sensor JSON |
+| `ws_build_config_base()` | Build config JSON with version info |
 
 ## License
 
