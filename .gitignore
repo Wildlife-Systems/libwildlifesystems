@@ -1,0 +1,37 @@
+# Build output
+libwildlifesystems.a
+build/
+*.o
+*.obj
+
+# Test output
+# .exe covers Windows and Cygwin builds, where gcc appends the suffix and a
+# plain "run_tests" entry would not match.
+tests/run_tests
+tests/run_tests.exe
+*.exe
+
+# Debian build artifacts
+debian/*.debhelper
+debian/*.debhelper.log
+debian/*.substvars
+debian/files
+debian/.debhelper/
+debian/libwildlifesystems/
+debian/libwildlifesystems-dev/
+debian/debhelper-build-stamp
+*.deb
+*.buildinfo
+*.changes
+*.dsc
+
+# Editor files
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
