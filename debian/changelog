@@ -1,3 +1,14 @@
+libwildlifesystems (1.2.0) stable; urgency=medium
+
+  * Add ws_json_object_end for brace-matched object bounds
+  * Add ws_json_parse_object for nested JSON object fields
+  * Add ws_json_parse_double for floating-point JSON fields
+  * ws_json_count_objects now counts top-level objects only,
+    ignoring nesting and braces inside string literals
+  * Add unit tests for the new JSON parser functions
+
+ -- Ed Baker <edwbaker@gmail.com>  Fri, 11 Sep 2026 10:00:00 +0000
+
 libwildlifesystems (1.1.1) stable; urgency=medium
 
   * Fix timestamp output as integer instead of string
