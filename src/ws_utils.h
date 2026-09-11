@@ -257,10 +257,19 @@ char *ws_json_parse_object(const char *ptr, const char *end, const char *field);
  * Parse a JSON string field from a JSON object.
  * Searches for "field":"value" between ptr and end.
  *
+ * The value must be a string. A field whose value is an object, array, number,
+ * boolean or null returns NULL rather than the next quoted text in the buffer,
+ * so a polymorphic field can be told apart by trying ws_json_parse_object()
+ * and this function in either order.
+ *
+ * Escaped quotes (\") inside the value do not terminate it. The value is
+ * returned exactly as it appears in the JSON, still escaped.
+ *
  * @param ptr       Start of JSON object to search
  * @param end       End of JSON object (usually the closing '}')
  * @param field     Field name to search for (without quotes)
- * @return          Allocated string with field value, or NULL if not found. Caller must free.
+ * @return          Allocated string with field value, or NULL if not found or
+ *                  not string-valued. Caller must free.
  */
 char *ws_json_parse_string(const char *ptr, const char *end, const char *field);
 

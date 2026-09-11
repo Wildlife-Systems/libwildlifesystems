@@ -505,28 +505,46 @@ char *ws_json_parse_object(const char *ptr, const char *end, const char *field) 
  */
 char *ws_json_parse_string(const char *ptr, const char *end, const char *field) {
     char search[128];
-    char *field_ptr;
-    char *quote_start;
-    char *quote_end;
-    
+    const char *field_ptr;
+    const char *colon;
+    const char *value;
+    const char *value_end;
+
     if (!ptr || !end || !field) return NULL;
-    
+
     snprintf(search, sizeof(search), "\"%s\"", field);
     field_ptr = strstr(ptr, search);
-    
+
     if (!field_ptr || field_ptr >= end) return NULL;
-    
-    field_ptr = strchr(field_ptr, ':');
-    if (!field_ptr || field_ptr >= end) return NULL;
-    
-    quote_start = strchr(field_ptr, '"');
-    if (!quote_start || quote_start >= end) return NULL;
-    
-    quote_start++;
-    quote_end = strchr(quote_start, '"');
-    if (!quote_end || quote_end > end) return NULL;
-    
-    return strndup(quote_start, quote_end - quote_start);
+
+    colon = strchr(field_ptr, ':');
+    if (!colon || colon >= end) return NULL;
+
+    /* The value must actually be a string: the first non-whitespace character
+       after the colon has to be a quote. Without this check an object- or
+       number-valued field returns whatever text happens to be quoted next -
+       for "location":{"latitude":51.5} that is the nested key "latitude". */
+    value = colon + 1;
+    while (value < end && (*value == ' '  || *value == '\t' ||
+                           *value == '\n' || *value == '\r')) {
+        value++;
+    }
+    if (value >= end || *value != '"') return NULL;
+
+    /* Closing quote, honouring \" escapes so a value containing an escaped
+       quote is not truncated at it. */
+    value_end = value + 1;
+    while (value_end < end) {
+        if (*value_end == '\\') {
+            value_end += 2;  /* the escape and the character it escapes */
+            continue;
+        }
+        if (*value_end == '"') break;
+        value_end++;
+    }
+    if (value_end >= end || *value_end != '"') return NULL;  /* unterminated */
+
+    return strndup(value + 1, (size_t)(value_end - value - 1));
 }
 
 /*

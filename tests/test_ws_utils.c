@@ -242,6 +242,76 @@ void test_json_parse_string_second_field(void) {
     free(result);
 }
 
+/* An object-valued field is not a string: must not return the nested key. */
+void test_json_parse_string_rejects_object(void) {
+    const char *json = "{\"location\":{\"latitude\":51.5},\"pin\":4}";
+    const char *end = ws_json_object_end(json);
+    TEST_ASSERT_NULL(ws_json_parse_string(json, end, "location"));
+}
+
+void test_json_parse_string_rejects_number(void) {
+    const char *json = "{\"pin\":4,\"name\":\"sensor\"}";
+    const char *end = ws_json_object_end(json);
+    TEST_ASSERT_NULL(ws_json_parse_string(json, end, "pin"));
+}
+
+void test_json_parse_string_rejects_bool(void) {
+    const char *json = "{\"internal\":true,\"name\":\"sensor\"}";
+    const char *end = ws_json_object_end(json);
+    TEST_ASSERT_NULL(ws_json_parse_string(json, end, "internal"));
+}
+
+void test_json_parse_string_rejects_array(void) {
+    const char *json = "{\"tags\":[\"a\",\"b\"],\"name\":\"sensor\"}";
+    const char *end = ws_json_object_end(json);
+    TEST_ASSERT_NULL(ws_json_parse_string(json, end, "tags"));
+}
+
+/* The token form of a polymorphic field still parses. */
+void test_json_parse_string_token_value(void) {
+    const char *json = "{\"location\":\"{{node}}\"}";
+    const char *end = ws_json_object_end(json);
+    char *result = ws_json_parse_string(json, end, "location");
+    TEST_ASSERT_NOT_NULL(result);
+    TEST_ASSERT_EQUAL_STRING("{{node}}", result);
+    free(result);
+}
+
+void test_json_parse_string_whitespace_before_value(void) {
+    const char *json = "{\"name\":   \"spaced\"}";
+    const char *end = ws_json_object_end(json);
+    char *result = ws_json_parse_string(json, end, "name");
+    TEST_ASSERT_NOT_NULL(result);
+    TEST_ASSERT_EQUAL_STRING("spaced", result);
+    free(result);
+}
+
+void test_json_parse_string_empty_value(void) {
+    const char *json = "{\"name\":\"\"}";
+    const char *end = ws_json_object_end(json);
+    char *result = ws_json_parse_string(json, end, "name");
+    TEST_ASSERT_NOT_NULL(result);
+    TEST_ASSERT_EQUAL_STRING("", result);
+    free(result);
+}
+
+/* An escaped quote must not truncate the value. */
+void test_json_parse_string_escaped_quote(void) {
+    const char *json = "{\"name\":\"say \\\"hi\\\" now\",\"pin\":4}";
+    const char *end = ws_json_object_end(json);
+    char *result = ws_json_parse_string(json, end, "name");
+    TEST_ASSERT_NOT_NULL(result);
+    /* Returned still escaped, exactly as it appears in the JSON. */
+    TEST_ASSERT_EQUAL_STRING("say \\\"hi\\\" now", result);
+    free(result);
+}
+
+void test_json_parse_string_unterminated_value(void) {
+    const char *json = "{\"name\":\"no close}";
+    const char *end = json + strlen(json);
+    TEST_ASSERT_NULL(ws_json_parse_string(json, end, "name"));
+}
+
 void test_json_parse_string_not_found(void) {
     const char *json = "{\"name\":\"test_sensor\"}";
     const char *end = json + strlen(json);
@@ -559,6 +629,15 @@ int main(void) {
     RUN_TEST(test_json_parse_string_found);
     RUN_TEST(test_json_parse_string_second_field);
     RUN_TEST(test_json_parse_string_not_found);
+    RUN_TEST(test_json_parse_string_rejects_object);
+    RUN_TEST(test_json_parse_string_rejects_number);
+    RUN_TEST(test_json_parse_string_rejects_bool);
+    RUN_TEST(test_json_parse_string_rejects_array);
+    RUN_TEST(test_json_parse_string_token_value);
+    RUN_TEST(test_json_parse_string_whitespace_before_value);
+    RUN_TEST(test_json_parse_string_empty_value);
+    RUN_TEST(test_json_parse_string_escaped_quote);
+    RUN_TEST(test_json_parse_string_unterminated_value);
     
     /* JSON Parse Bool tests */
     RUN_TEST(test_json_parse_bool_true);
