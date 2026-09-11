@@ -218,13 +218,40 @@ void ws_print_version(const char *program_name, const char *version);
 char *ws_read_file(const char *path, size_t *size_out);
 
 /*
- * Count JSON objects in a buffer by counting '{' characters.
- * Simple heuristic for counting objects in a JSON array.
+ * Count top-level JSON objects in a buffer.
+ * Braces inside string literals are ignored, as are braces nested inside
+ * another object, so a config array of objects returns one count per entry
+ * however deeply those entries are structured.
  *
  * @param buffer    JSON buffer to scan
- * @return          Number of '{' characters found
+ * @return          Number of top-level objects found
  */
 int ws_json_count_objects(const char *buffer);
+
+/*
+ * Find the '}' matching the '{' at the start of an object.
+ * Respects nesting and skips string literals, including \" escapes, so it is
+ * safe on objects containing nested objects or braces inside string values.
+ * Use in place of strchr(ptr, '}') when bounding a config object.
+ *
+ * @param start     Pointer to the opening '{' (leading whitespace is skipped)
+ * @return          Pointer to the matching '}', or NULL if unterminated or
+ *                  if start does not point at an object
+ */
+const char *ws_json_object_end(const char *start);
+
+/*
+ * Parse a nested JSON object field from a JSON object.
+ * Searches for "field":{...} between ptr and end, returning the object
+ * including its surrounding braces.
+ *
+ * @param ptr       Start of JSON object to search
+ * @param end       End of JSON object
+ * @param field     Field name to search for (without quotes)
+ * @return          Allocated string with the object, or NULL if not found or
+ *                  malformed. Caller must free.
+ */
+char *ws_json_parse_object(const char *ptr, const char *end, const char *field);
 
 /*
  * Parse a JSON string field from a JSON object.
@@ -260,6 +287,19 @@ bool ws_json_parse_bool(const char *ptr, const char *end, const char *field, boo
  * @return            Parsed integer value, or default_val if not found
  */
 int ws_json_parse_int(const char *ptr, const char *end, const char *field, int default_val);
+
+/*
+ * Parse a JSON floating-point field from a JSON object.
+ * Searches for "field":1.23 between ptr and end. Accepts anything strtod
+ * accepts, including exponent notation and a leading '-'.
+ *
+ * @param ptr         Start of JSON object to search
+ * @param end         End of JSON object
+ * @param field       Field name to search for
+ * @param default_val Value to return if field not found or not a number
+ * @return            Parsed value, or default_val if not found
+ */
+double ws_json_parse_double(const char *ptr, const char *end, const char *field, double default_val);
 
 /*
  * Get serial number with suffix appended.

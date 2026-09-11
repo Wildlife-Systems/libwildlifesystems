@@ -394,19 +394,110 @@ char *ws_read_file(const char *path, size_t *size_out) {
 }
 
 /*
- * Count JSON objects in a buffer by counting '{' characters.
+ * Advance past a JSON string literal.
+ * `ptr` must point at the opening quote. Returns a pointer to the character
+ * after the closing quote, or to the terminating null if unterminated.
+ */
+static const char *ws_json_skip_string(const char *ptr) {
+    ptr++;  /* opening quote */
+    while (*ptr) {
+        if (*ptr == '\\') {
+            /* Escape: skip the backslash and whatever it escapes, taking care
+               not to run off the end of a buffer ending in a lone backslash. */
+            if (!*(ptr + 1)) return ptr + 1;
+            ptr += 2;
+            continue;
+        }
+        if (*ptr == '"') return ptr + 1;
+        ptr++;
+    }
+    return ptr;
+}
+
+/*
+ * Count top-level JSON objects in a buffer.
  */
 int ws_json_count_objects(const char *buffer) {
     int count = 0;
+    int depth = 0;
     const char *ptr = buffer;
-    
+
     if (!buffer) return 0;
-    
-    while ((ptr = strchr(ptr, '{')) != NULL) {
-        count++;
+
+    while (*ptr) {
+        if (*ptr == '"') {
+            ptr = ws_json_skip_string(ptr);
+            continue;
+        }
+        if (*ptr == '{') {
+            if (depth == 0) count++;
+            depth++;
+        } else if (*ptr == '}') {
+            if (depth > 0) depth--;
+        }
         ptr++;
     }
     return count;
+}
+
+/*
+ * Find the '}' matching the '{' at the start of an object.
+ */
+const char *ws_json_object_end(const char *start) {
+    int depth = 0;
+    const char *ptr = start;
+
+    if (!start) return NULL;
+
+    while (*ptr == ' ' || *ptr == '\t' || *ptr == '\n' || *ptr == '\r') ptr++;
+    if (*ptr != '{') return NULL;
+
+    while (*ptr) {
+        if (*ptr == '"') {
+            ptr = ws_json_skip_string(ptr);
+            continue;
+        }
+        if (*ptr == '{') {
+            depth++;
+        } else if (*ptr == '}') {
+            depth--;
+            if (depth == 0) return ptr;
+        }
+        ptr++;
+    }
+    return NULL;  /* unterminated */
+}
+
+/*
+ * Parse a nested JSON object field from a JSON object.
+ */
+char *ws_json_parse_object(const char *ptr, const char *end, const char *field) {
+    char search[128];
+    const char *field_ptr;
+    const char *colon;
+    const char *obj_start;
+    const char *obj_end;
+
+    if (!ptr || !end || !field) return NULL;
+
+    snprintf(search, sizeof(search), "\"%s\"", field);
+    field_ptr = strstr(ptr, search);
+
+    if (!field_ptr || field_ptr >= end) return NULL;
+
+    colon = strchr(field_ptr, ':');
+    if (!colon || colon >= end) return NULL;
+
+    obj_start = colon + 1;
+    while (*obj_start == ' ' || *obj_start == '\t' ||
+           *obj_start == '\n' || *obj_start == '\r') obj_start++;
+
+    if (*obj_start != '{') return NULL;  /* not an object */
+
+    obj_end = ws_json_object_end(obj_start);
+    if (!obj_end) return NULL;
+
+    return strndup(obj_start, (size_t)(obj_end - obj_start) + 1);
 }
 
 /*
@@ -489,8 +580,41 @@ int ws_json_parse_int(const char *ptr, const char *end, const char *field, int d
     while (*colon == ' ' || *colon == '\t') colon++;
     
     if (colon >= end) return default_val;
-    
+
     return atoi(colon);
+}
+
+/*
+ * Parse a JSON floating-point field from a JSON object.
+ */
+double ws_json_parse_double(const char *ptr, const char *end, const char *field, double default_val) {
+    char search[128];
+    const char *field_ptr;
+    const char *colon;
+    char *value_end;
+    double value;
+
+    if (!ptr || !end || !field) return default_val;
+
+    snprintf(search, sizeof(search), "\"%s\"", field);
+    field_ptr = strstr(ptr, search);
+
+    if (!field_ptr || field_ptr >= end) return default_val;
+
+    colon = strchr(field_ptr, ':');
+    if (!colon || colon >= end) return default_val;
+
+    colon++;
+    while (*colon == ' ' || *colon == '\t') colon++;
+
+    if (colon >= end) return default_val;
+
+    value = strtod(colon, &value_end);
+
+    /* No conversion performed - the field was present but not a number */
+    if (value_end == colon) return default_val;
+
+    return value;
 }
 
 /*

@@ -19,8 +19,12 @@ TEST_BIN = run_tests
 
 all: $(TEST_BIN)
 
+# -lm for fabs(), used by TEST_ASSERT_EQUAL_FLOAT. GCC normally inlines it as a
+# builtin, but linking explicitly avoids depending on that.
+LDLIBS = -lm
+
 $(TEST_BIN): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
 unity.o: unity.c unity.h
 	$(CC) $(CFLAGS) -c unity.c
