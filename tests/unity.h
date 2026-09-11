@@ -32,6 +32,11 @@ int UnityEnd(void);
 void UnityConcludeTest(void);
 void UnityDefaultTestRun(UnityTestFunction Func, const char* FuncName, int FuncLineNum);
 
+/* Defined by each test file and called by UnityDefaultTestRun around every
+   test. Declared here so unity.c does not have to assume them implicitly. */
+void setUp(void);
+void tearDown(void);
+
 /* Test Macros */
 #define TEST_PROTECT() 1
 #define TEST_ABORT() return
