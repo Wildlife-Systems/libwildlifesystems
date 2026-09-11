@@ -5,7 +5,17 @@ libwildlifesystems (1.2.0) stable; urgency=medium
   * Add ws_json_parse_double for floating-point JSON fields
   * ws_json_count_objects now counts top-level objects only,
     ignoring nesting and braces inside string literals
-  * Add unit tests for the new JSON parser functions
+  * ws_json_parse_string now requires the value to actually be a string, and
+    honours \" escapes. Previously an object-valued field returned the first
+    key inside it, and a value containing an escaped quote was truncated
+  * Add ws_location_t, ws_parse_sensor_location and ws_location_json for
+    per-sensor locations from /etc/ws/sensors/<driver>.json
+  * Add ws_json_replace_null_raw for object and pre-quoted field values;
+    ws_sensor_json_set_config now uses it
+  * ws_build_sensor_json_base takes device and location parameters.
+    API change: all callers must be updated and rebuilt
+  * Add unit tests for the new JSON parser functions, location parsing and
+    raw field replacement
 
  -- Ed Baker <edwbaker@gmail.com>  Fri, 11 Sep 2026 10:00:00 +0000
 

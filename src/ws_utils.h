@@ -131,11 +131,29 @@ void ws_json_replace_null_int(char *json, const char *key, long value);
  * Replace a JSON null value with a boolean value.
  * e.g. "internal":null -> "internal":true
  *
+ * An existing boolean literal is also replaced, so a template that ships
+ * "internal":false (as sc-prototype does) is updated rather than left alone.
+ *
  * @param json     JSON string to modify (in-place)
  * @param key      Field name to search for
  * @param value    Boolean value to insert
  */
 void ws_json_replace_null_bool(char *json, const char *key, bool value);
+
+/*
+ * Replace "key":null with "key":<raw_json>, inserting the value verbatim.
+ *
+ * For values that are not scalars - an object, an array, or a string that is
+ * already quoted. Does nothing if the key is not present as null, or if the
+ * result would not fit in json_capacity.
+ *
+ * @param json          JSON buffer to modify
+ * @param json_capacity Size of the buffer
+ * @param key           Field name (without quotes)
+ * @param raw_json      Value to insert verbatim, including any quotes or braces
+ */
+void ws_json_replace_null_raw(char *json, size_t json_capacity,
+                              const char *key, const char *raw_json);
 
 /*
  * Get JSON prototype template by calling sc-prototype.
@@ -320,6 +338,71 @@ double ws_json_parse_double(const char *ptr, const char *end, const char *field,
 char *ws_get_serial_with_suffix(const char *suffix);
 
 /* ============================================================================
+ * Sensor Location
+ * ============================================================================
+ * Where a sensor physically sits, from the "location" key of its entry in
+ * /etc/ws/sensors/<driver>.json. A sensor is frequently not at the node: a
+ * 1-wire probe on a cable, a buried soil probe, a sensor up a mast.
+ *
+ * Note this is unrelated to ws_location_filter_t, which selects internal or
+ * external sensors and says nothing about position.
+ */
+
+/* Where a sensor's position came from. */
+typedef enum {
+    WS_LOC_UNDECLARED = 0,  /* no "location" key, or one that failed validation */
+    WS_LOC_NODE,            /* "{{node}}"  - at the node's own location */
+    WS_LOC_NONE,            /* "{{none}}"  - deliberately has no location */
+    WS_LOC_EXPLICIT         /* coordinates given in the config */
+} ws_location_source_t;
+
+typedef struct {
+    ws_location_source_t source;
+    double latitude;      /* WGS84 decimal degrees, WS_LOC_EXPLICIT only */
+    double longitude;     /* WGS84 decimal degrees, WS_LOC_EXPLICIT only */
+    double altitude;      /* metres; valid only if has_altitude */
+    double accuracy;      /* metres, radius; valid only if has_accuracy */
+    bool   has_altitude;
+    bool   has_accuracy;
+} ws_location_t;
+
+/*
+ * Parse the "location" field of one sensor config object.
+ *
+ * Accepts exactly three forms, per the sensor config specification:
+ *   "location": "{{node}}"                      -> WS_LOC_NODE
+ *   "location": "{{none}}"                      -> WS_LOC_NONE
+ *   "location": { "latitude": .., "longitude": .. [, "altitude", "accuracy"] }
+ *                                               -> WS_LOC_EXPLICIT
+ * A missing "location" key yields WS_LOC_UNDECLARED.
+ *
+ * Validation follows ws_read_geolocation(): latitude in [-90, 90], longitude
+ * in [-180, 180], accuracy >= 0, and both latitude and longitude required. A
+ * value that fails validation, or an unrecognised token, is logged and yields
+ * WS_LOC_UNDECLARED rather than failing the call - a typo in a coordinate must
+ * not stop a sensor reporting readings.
+ *
+ * @param ptr   Start of the sensor's config object
+ * @param end   End of that object (from ws_json_object_end())
+ * @param out   Populated on return; zeroed first
+ * @return      0 on success, -1 on bad arguments
+ */
+int ws_parse_sensor_location(const char *ptr, const char *end, ws_location_t *out);
+
+/*
+ * Render a location as the JSON value for a reading's "location" field.
+ *
+ * WS_LOC_NODE       -> "\"{{node}}\""
+ * WS_LOC_NONE       -> "\"{{none}}\""
+ * WS_LOC_EXPLICIT   -> a GeoJSON Point, coordinates [lon, lat] or [lon, lat, alt]
+ * WS_LOC_UNDECLARED -> NULL, so the caller leaves the field null
+ *
+ * @param loc   Location to render
+ * @return      Allocated JSON value, or NULL for WS_LOC_UNDECLARED. Caller frees.
+ */
+char *ws_location_json(const ws_location_t *loc);
+
+/* ============================================================================
  * JSON Output Builder
  * ============================================================================
  * Helper functions to build JSON output strings incrementally.
@@ -488,19 +571,27 @@ void ws_format_timestamp(char *buffer, size_t bufsize, time_t timestamp);
  *
  * @param output        Output buffer for JSON
  * @param output_len    Size of output buffer
- * @param sensor        Sensor type (e.g., "dht11", "bme680")
+ * @param sensor        Sensor type (e.g., "dht11_temperature", "ds18b20")
+ * @param device        Physical device model (e.g., "dht11", "bme680",
+ *                      "ds18b20"), or NULL if the driver has none to name.
+ *                      Distinct from `sensor`, which may combine device and
+ *                      measurand; this is what identifies the STA Sensor.
  * @param measures      What is measured (e.g., "temperature", "humidity")
- * @param unit          Unit of measurement (e.g., "Celsius", "%")
+ * @param unit          Unit of measurement (e.g., "Celsius", "percentage")
  * @param sensor_id     Unique sensor identifier
  * @param sensor_name   Human-readable name (can be NULL)
  * @param internal      true if internal sensor
+ * @param location      Where the sensor is, from its config; NULL or
+ *                      WS_LOC_UNDECLARED leaves the field null
  * @param timestamp     Unix timestamp of reading
  * @return              0 on success, -1 on error (prototype not available)
  */
 int ws_build_sensor_json_base(char *output, size_t output_len,
-                               const char *sensor, const char *measures, const char *unit,
+                               const char *sensor, const char *device,
+                               const char *measures, const char *unit,
                                const char *sensor_id, const char *sensor_name,
-                               bool internal, time_t timestamp);
+                               bool internal, const ws_location_t *location,
+                               time_t timestamp);
 
 /*
  * Add value field to sensor JSON.

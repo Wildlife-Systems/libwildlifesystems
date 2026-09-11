@@ -406,6 +406,203 @@ void test_json_parse_double_zero(void) {
         ws_json_parse_double(json, end, "altitude", 99.5), 1e-9);
 }
 
+/* ========== Raw JSON Replacement Tests ========== */
+
+void test_replace_null_raw_object(void) {
+    char json[256] = "{\"a\":1,\"location\":null,\"b\":2}";
+    ws_json_replace_null_raw(json, sizeof(json), "location",
+                             "{\"type\":\"Point\",\"coordinates\":[1.0,2.0]}");
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"a\":1,\"location\":{\"type\":\"Point\",\"coordinates\":[1.0,2.0]},\"b\":2}",
+        json);
+}
+
+void test_replace_null_raw_quoted_string(void) {
+    char json[128] = "{\"location\":null,\"b\":2}";
+    ws_json_replace_null_raw(json, sizeof(json), "location", "\"{{node}}\"");
+    TEST_ASSERT_EQUAL_STRING("{\"location\":\"{{node}}\",\"b\":2}", json);
+}
+
+void test_replace_null_raw_key_absent(void) {
+    char json[128] = "{\"a\":1}";
+    ws_json_replace_null_raw(json, sizeof(json), "location", "\"{{node}}\"");
+    TEST_ASSERT_EQUAL_STRING("{\"a\":1}", json);
+}
+
+/* Already set to something is not null, so it is left alone. */
+void test_replace_null_raw_not_null(void) {
+    char json[128] = "{\"location\":\"{{none}}\"}";
+    ws_json_replace_null_raw(json, sizeof(json), "location", "\"{{node}}\"");
+    TEST_ASSERT_EQUAL_STRING("{\"location\":\"{{none}}\"}", json);
+}
+
+/* Must refuse rather than overflow the caller's buffer. */
+void test_replace_null_raw_too_long_refused(void) {
+    char json[32] = "{\"location\":null}";
+    ws_json_replace_null_raw(json, sizeof(json), "location",
+                             "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700,12.00]}");
+    TEST_ASSERT_EQUAL_STRING("{\"location\":null}", json);
+}
+
+/* config still works through the shared implementation. */
+void test_set_config_still_works(void) {
+    char json[256] = "{\"value\":1,\"config\":null,\"error\":null}";
+    ws_sensor_json_set_config(json, sizeof(json), "{\"software_version\":\"1.0\"}");
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"value\":1,\"config\":{\"software_version\":\"1.0\"},\"error\":null}", json);
+}
+
+/* ========== Sensor Location Tests ========== */
+
+/* Parse the "location" field of a one-entry config object. */
+static ws_location_t parse_loc(const char *json) {
+    ws_location_t loc;
+    const char *end = ws_json_object_end(json);
+    ws_parse_sensor_location(json, end, &loc);
+    return loc;
+}
+
+void test_location_node_token(void) {
+    ws_location_t l = parse_loc("{\"hw_id\":\"28-a\",\"location\":\"{{node}}\"}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_NODE, l.source);
+}
+
+void test_location_none_token(void) {
+    ws_location_t l = parse_loc("{\"hw_id\":\"28-a\",\"location\":\"{{none}}\"}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_NONE, l.source);
+}
+
+void test_location_absent_is_undeclared(void) {
+    ws_location_t l = parse_loc("{\"hw_id\":\"28-a\",\"internal\":true}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_UNDECLARED, l.source);
+}
+
+void test_location_unknown_token_is_undeclared(void) {
+    ws_location_t l = parse_loc("{\"location\":\"{{somewhere}}\"}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_UNDECLARED, l.source);
+}
+
+void test_location_explicit_lat_lon(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":51.49674,\"longitude\":-0.17598}}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_EXPLICIT, l.source);
+    TEST_ASSERT_EQUAL_FLOAT(51.49674, l.latitude, 1e-9);
+    TEST_ASSERT_EQUAL_FLOAT(-0.17598, l.longitude, 1e-9);
+    TEST_ASSERT_FALSE(l.has_altitude);
+    TEST_ASSERT_FALSE(l.has_accuracy);
+}
+
+void test_location_explicit_with_altitude_accuracy(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":51.5,\"longitude\":-0.17,"
+        "\"altitude\":11.85,\"accuracy\":2.0}}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_EXPLICIT, l.source);
+    TEST_ASSERT_TRUE(l.has_altitude);
+    TEST_ASSERT_TRUE(l.has_accuracy);
+    TEST_ASSERT_EQUAL_FLOAT(11.85, l.altitude, 1e-9);
+    TEST_ASSERT_EQUAL_FLOAT(2.0, l.accuracy, 1e-9);
+}
+
+/* Altitude 0 is a real value, not "absent". */
+void test_location_zero_altitude_is_present(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":51.5,\"longitude\":-0.17,\"altitude\":0}}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_EXPLICIT, l.source);
+    TEST_ASSERT_TRUE(l.has_altitude);
+    TEST_ASSERT_EQUAL_FLOAT(0.0, l.altitude, 1e-9);
+}
+
+/* Equator / prime meridian must not read as absent either. */
+void test_location_zero_coordinates(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":0,\"longitude\":0}}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_EXPLICIT, l.source);
+}
+
+void test_location_missing_longitude_rejected(void) {
+    ws_location_t l = parse_loc("{\"location\":{\"latitude\":51.5}}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_UNDECLARED, l.source);
+}
+
+void test_location_latitude_out_of_range(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":91.0,\"longitude\":0}}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_UNDECLARED, l.source);
+}
+
+void test_location_longitude_out_of_range(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":0,\"longitude\":-181.0}}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_UNDECLARED, l.source);
+}
+
+void test_location_negative_accuracy_rejected(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":51.5,\"longitude\":-0.17,\"accuracy\":-1}}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_UNDECLARED, l.source);
+}
+
+/* Boundary values are valid, not out of range. */
+void test_location_boundary_values_accepted(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":-90,\"longitude\":180,\"accuracy\":0}}");
+    TEST_ASSERT_EQUAL_INT(WS_LOC_EXPLICIT, l.source);
+    TEST_ASSERT_TRUE(l.has_accuracy);
+}
+
+void test_location_null_output_rejected(void) {
+    TEST_ASSERT_EQUAL_INT(-1, ws_parse_sensor_location("{}", "{}" + 2, NULL));
+}
+
+/* ========== Location JSON Tests ========== */
+
+void test_location_json_node(void) {
+    ws_location_t l = parse_loc("{\"location\":\"{{node}}\"}");
+    char *j = ws_location_json(&l);
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING("\"{{node}}\"", j);
+    free(j);
+}
+
+void test_location_json_none(void) {
+    ws_location_t l = parse_loc("{\"location\":\"{{none}}\"}");
+    char *j = ws_location_json(&l);
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING("\"{{none}}\"", j);
+    free(j);
+}
+
+void test_location_json_undeclared_is_null(void) {
+    ws_location_t l = parse_loc("{\"hw_id\":\"28-a\"}");
+    TEST_ASSERT_NULL(ws_location_json(&l));
+}
+
+/* GeoJSON order is [longitude, latitude] - the reverse of how it is written. */
+void test_location_json_explicit_lon_lat_order(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":51.496700,\"longitude\":-0.176400}}");
+    char *j = ws_location_json(&l);
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700]}", j);
+    free(j);
+}
+
+void test_location_json_explicit_with_altitude(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":51.496700,\"longitude\":-0.176400,"
+        "\"altitude\":12.0}}");
+    char *j = ws_location_json(&l);
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700,12.00]}", j);
+    free(j);
+}
+
+void test_location_json_null_input(void) {
+    TEST_ASSERT_NULL(ws_location_json(NULL));
+}
+
 /* ========== File Reading Tests ========== */
 
 void test_read_file_success(void) {
@@ -428,6 +625,48 @@ void test_read_file_with_size(void) {
 void test_read_file_not_found(void) {
     char *content = ws_read_file("/nonexistent/path", NULL);
     TEST_ASSERT_NULL(content);
+}
+
+/* ========== JSON null-replacement Tests ========== */
+
+/* The real sc-prototype template ships "internal" as false, not null. */
+#define PROTO_INTERNAL_FALSE     "{\"sensor\":null,\"internal\":false,\"error\":null}"
+
+void test_replace_null_bool_from_null(void) {
+    char json[256] = "{\"internal\":null,\"error\":null}";
+    ws_json_replace_null_bool(json, "internal", true);
+    TEST_ASSERT_EQUAL_STRING("{\"internal\":true,\"error\":null}", json);
+}
+
+void test_replace_null_bool_over_prototype_false(void) {
+    char json[256] = PROTO_INTERNAL_FALSE;
+    ws_json_replace_null_bool(json, "internal", true);
+    TEST_ASSERT_EQUAL_STRING("{\"sensor\":null,\"internal\":true,\"error\":null}", json);
+}
+
+void test_replace_null_bool_false_stays_false(void) {
+    char json[256] = PROTO_INTERNAL_FALSE;
+    ws_json_replace_null_bool(json, "internal", false);
+    TEST_ASSERT_EQUAL_STRING(PROTO_INTERNAL_FALSE, json);
+}
+
+void test_replace_null_bool_over_existing_true(void) {
+    char json[256] = "{\"internal\":true}";
+    ws_json_replace_null_bool(json, "internal", false);
+    TEST_ASSERT_EQUAL_STRING("{\"internal\":false}", json);
+}
+
+void test_replace_null_bool_absent_key_is_noop(void) {
+    char json[256] = PROTO_INTERNAL_FALSE;
+    ws_json_replace_null_bool(json, "missing", true);
+    TEST_ASSERT_EQUAL_STRING(PROTO_INTERNAL_FALSE, json);
+}
+
+/* "internal" must not be matched by a key that merely shares a prefix. */
+void test_replace_null_bool_no_prefix_collision(void) {
+    char json[256] = "{\"internal_only\":false,\"internal\":false}";
+    ws_json_replace_null_bool(json, "internal", true);
+    TEST_ASSERT_EQUAL_STRING("{\"internal_only\":false,\"internal\":true}", json);
 }
 
 /* ========== JSON Builder Tests ========== */
@@ -657,9 +896,46 @@ int main(void) {
     RUN_TEST(test_json_parse_double_zero);
     
     /* File Reading tests */
+    RUN_TEST(test_replace_null_raw_object);
+    RUN_TEST(test_replace_null_raw_quoted_string);
+    RUN_TEST(test_replace_null_raw_key_absent);
+    RUN_TEST(test_replace_null_raw_not_null);
+    RUN_TEST(test_replace_null_raw_too_long_refused);
+    RUN_TEST(test_set_config_still_works);
+
+    RUN_TEST(test_location_node_token);
+    RUN_TEST(test_location_none_token);
+    RUN_TEST(test_location_absent_is_undeclared);
+    RUN_TEST(test_location_unknown_token_is_undeclared);
+    RUN_TEST(test_location_explicit_lat_lon);
+    RUN_TEST(test_location_explicit_with_altitude_accuracy);
+    RUN_TEST(test_location_zero_altitude_is_present);
+    RUN_TEST(test_location_zero_coordinates);
+    RUN_TEST(test_location_missing_longitude_rejected);
+    RUN_TEST(test_location_latitude_out_of_range);
+    RUN_TEST(test_location_longitude_out_of_range);
+    RUN_TEST(test_location_negative_accuracy_rejected);
+    RUN_TEST(test_location_boundary_values_accepted);
+    RUN_TEST(test_location_null_output_rejected);
+
+    RUN_TEST(test_location_json_node);
+    RUN_TEST(test_location_json_none);
+    RUN_TEST(test_location_json_undeclared_is_null);
+    RUN_TEST(test_location_json_explicit_lon_lat_order);
+    RUN_TEST(test_location_json_explicit_with_altitude);
+    RUN_TEST(test_location_json_null_input);
+
     RUN_TEST(test_read_file_success);
     RUN_TEST(test_read_file_with_size);
     RUN_TEST(test_read_file_not_found);
+    
+    /* JSON null-replacement tests */
+    RUN_TEST(test_replace_null_bool_from_null);
+    RUN_TEST(test_replace_null_bool_over_prototype_false);
+    RUN_TEST(test_replace_null_bool_false_stays_false);
+    RUN_TEST(test_replace_null_bool_over_existing_true);
+    RUN_TEST(test_replace_null_bool_absent_key_is_noop);
+    RUN_TEST(test_replace_null_bool_no_prefix_collision);
     
     /* JSON Builder tests */
     RUN_TEST(test_json_builder_empty_object);

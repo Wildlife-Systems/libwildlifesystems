@@ -197,25 +197,34 @@ void ws_json_replace_null_int(char *json, const char *key, long value) {
  * Replace a JSON null value with a boolean value.
  */
 void ws_json_replace_null_bool(char *json, const char *key, bool value) {
+    /* sc-prototype ships "internal":false rather than null, so an existing
+       boolean literal has to be accepted as well as null -- otherwise the
+       field silently keeps the template's value. */
+    static const char *const literals[] = { "null", "false", "true" };
     char search[128];
     char replace[256];
-    char *pos;
-    size_t search_len, replace_len, tail_len;
-    
+    char *pos = NULL;
+    size_t search_len = 0, replace_len, tail_len;
+    size_t i;
+
     if (!json || !key) return;
-    
-    snprintf(search, sizeof(search), "\"%s\":null", key);
-    snprintf(replace, sizeof(replace), "\"%s\":%s", key, value ? "true" : "false");
-    
-    pos = strstr(json, search);
+
+    for (i = 0; i < sizeof(literals) / sizeof(literals[0]); i++) {
+        snprintf(search, sizeof(search), "\"%s\":%s", key, literals[i]);
+        pos = strstr(json, search);
+        if (pos) {
+            search_len = strlen(search);
+            break;
+        }
+    }
     if (pos == NULL) {
         return;
     }
-    
-    search_len = strlen(search);
+
+    snprintf(replace, sizeof(replace), "\"%s\":%s", key, value ? "true" : "false");
     replace_len = strlen(replace);
     tail_len = strlen(pos + search_len);
-    
+
     memmove(pos + replace_len, pos + search_len, tail_len + 1);
     memcpy(pos, replace, replace_len);
 }
@@ -635,6 +644,120 @@ double ws_json_parse_double(const char *ptr, const char *end, const char *field,
     return value;
 }
 
+/* ============================================================================
+ * Sensor Location
+ * ============================================================================ */
+
+/* Sentinel for "this numeric field was not present". No legitimate latitude,
+   longitude, altitude or accuracy can take this value. */
+#define WS_LOC_ABSENT (-1e300)
+
+/*
+ * Parse the "location" field of one sensor config object.
+ */
+int ws_parse_sensor_location(const char *ptr, const char *end, ws_location_t *out) {
+    char *obj;
+    char *token;
+
+    if (!out) return -1;
+
+    memset(out, 0, sizeof(*out));
+    out->source = WS_LOC_UNDECLARED;
+
+    if (!ptr || !end) return -1;
+
+    /* Object form first. ws_json_parse_string() rejects non-string values, so
+       the order is not load-bearing, but trying the richer form first keeps
+       the intent obvious. */
+    obj = ws_json_parse_object(ptr, end, "location");
+    if (obj) {
+        const char *oe = obj + strlen(obj);
+        double lat = ws_json_parse_double(obj, oe, "latitude",  WS_LOC_ABSENT);
+        double lon = ws_json_parse_double(obj, oe, "longitude", WS_LOC_ABSENT);
+        double alt = ws_json_parse_double(obj, oe, "altitude",  WS_LOC_ABSENT);
+        double acc = ws_json_parse_double(obj, oe, "accuracy",  WS_LOC_ABSENT);
+
+        if (lat == WS_LOC_ABSENT || lon == WS_LOC_ABSENT) {
+            ws_log_warning("Sensor location needs both latitude and longitude; "
+                           "ignoring location");
+        } else if (lat < -90.0 || lat > 90.0) {
+            ws_log_warning("Sensor latitude %f out of range [-90, 90]; "
+                           "ignoring location", lat);
+        } else if (lon < -180.0 || lon > 180.0) {
+            ws_log_warning("Sensor longitude %f out of range [-180, 180]; "
+                           "ignoring location", lon);
+        } else if (acc != WS_LOC_ABSENT && acc < 0.0) {
+            ws_log_warning("Sensor location accuracy %f is negative; "
+                           "ignoring location", acc);
+        } else {
+            out->source    = WS_LOC_EXPLICIT;
+            out->latitude  = lat;
+            out->longitude = lon;
+            if (alt != WS_LOC_ABSENT) {
+                out->altitude = alt;
+                out->has_altitude = true;
+            }
+            if (acc != WS_LOC_ABSENT) {
+                out->accuracy = acc;
+                out->has_accuracy = true;
+            }
+        }
+        free(obj);
+        return 0;
+    }
+
+    /* Token form. */
+    token = ws_json_parse_string(ptr, end, "location");
+    if (token) {
+        if (strcmp(token, "{{node}}") == 0) {
+            out->source = WS_LOC_NODE;
+        } else if (strcmp(token, "{{none}}") == 0) {
+            out->source = WS_LOC_NONE;
+        } else {
+            ws_log_warning("Unrecognised sensor location \"%s\"; expected "
+                           "\"{{node}}\", \"{{none}}\" or coordinates", token);
+        }
+        free(token);
+    }
+
+    /* No "location" key at all leaves WS_LOC_UNDECLARED. */
+    return 0;
+}
+
+/*
+ * Render a location as the JSON value for a reading's "location" field.
+ */
+char *ws_location_json(const ws_location_t *loc) {
+    char buf[256];
+
+    if (!loc) return NULL;
+
+    switch (loc->source) {
+        case WS_LOC_NODE:
+            return strdup("\"{{node}}\"");
+
+        case WS_LOC_NONE:
+            return strdup("\"{{none}}\"");
+
+        case WS_LOC_EXPLICIT:
+            /* GeoJSON is [longitude, latitude], in that order. */
+            if (loc->has_altitude) {
+                snprintf(buf, sizeof(buf),
+                         "{\"type\":\"Point\",\"coordinates\":[%.6f,%.6f,%.2f]}",
+                         loc->longitude, loc->latitude, loc->altitude);
+            } else {
+                snprintf(buf, sizeof(buf),
+                         "{\"type\":\"Point\",\"coordinates\":[%.6f,%.6f]}",
+                         loc->longitude, loc->latitude);
+            }
+            return strdup(buf);
+
+        case WS_LOC_UNDECLARED:
+        default:
+            return NULL;
+    }
+}
+
 /*
  * Get serial number with suffix appended.
  */
@@ -891,28 +1014,46 @@ void ws_format_timestamp(char *buffer, size_t bufsize, time_t timestamp) {
  * Build base sensor JSON from sc-prototype template.
  */
 int ws_build_sensor_json_base(char *output, size_t output_len,
-                               const char *sensor, const char *measures, const char *unit,
+                               const char *sensor, const char *device,
+                               const char *measures, const char *unit,
                                const char *sensor_id, const char *sensor_name,
-                               bool internal, time_t timestamp) {
+                               bool internal, const ws_location_t *location,
+                               time_t timestamp) {
     const char *prototype;
-    
+
     if (!output || output_len == 0) return -1;
-    
+
     prototype = ws_get_prototype_cached();
     if (!prototype || !*prototype) {
         output[0] = '\0';
         return -1;
     }
-    
+
     /* Start with a copy of the prototype */
     strncpy(output, prototype, output_len - 1);
     output[output_len - 1] = '\0';
-    
+
     /* Replace common fields */
     ws_json_replace_null_string(output, "sensor", sensor);
     ws_json_replace_null_string(output, "measures", measures);
     ws_json_replace_null_string(output, "unit", unit);
     ws_json_replace_null_string(output, "sensor_id", sensor_id);
+
+    /* Physical device model, for the STA Sensor entity. Optional: a driver
+       that cannot name its device leaves the field null. */
+    if (device && device[0] != '\0') {
+        ws_json_replace_null_string(output, "device", device);
+    }
+
+    /* Location is a token string or a GeoJSON object, so it goes in raw.
+       An undeclared location leaves the field null. */
+    if (location) {
+        char *location_json = ws_location_json(location);
+        if (location_json) {
+            ws_json_replace_null_raw(output, output_len, "location", location_json);
+            free(location_json);
+        }
+    }
     
     /* Only set sensor_name if provided */
     if (sensor_name && sensor_name[0] != '\0') {
@@ -973,30 +1114,33 @@ void ws_sensor_json_set_error(char *json, const char *error_msg) {
 /*
  * Set the config field in sensor JSON to a custom JSON object.
  */
-void ws_sensor_json_set_config(char *json, size_t json_capacity, const char *config_json) {
+void ws_json_replace_null_raw(char *json, size_t json_capacity,
+                              const char *key, const char *raw_json) {
+    char search[128];
     char *pos;
-    const char *search = "\"config\":null";
-    size_t search_len, config_len, tail_len;
-    
-    if (!json || !config_json) return;
-    
+    size_t search_len, prefix_len, raw_len, tail_len, new_total;
+
+    if (!json || !key || !raw_json) return;
+
+    snprintf(search, sizeof(search), "\"%s\":null", key);
     pos = strstr(json, search);
     if (!pos) return;
-    
+
     search_len = strlen(search);
-    config_len = strlen(config_json);
+    /* The "<key>": part stays put; only the four characters of null go. */
+    prefix_len = search_len - 4;
+    raw_len = strlen(raw_json);
     tail_len = strlen(pos + search_len);
-    
-    /* Check if we have enough space */
-    /* We're replacing "config":null with "config":<config_json> */
-    /* The "config": part stays (9 chars), null (4 chars) gets replaced */
-    size_t new_total = (pos - json) + 9 + config_len + tail_len + 1;
+
+    new_total = (size_t)(pos - json) + prefix_len + raw_len + tail_len + 1;
     if (new_total > json_capacity) return;
-    
-    /* Move tail to make room */
-    memmove(pos + 9 + config_len, pos + search_len, tail_len + 1);
-    /* Copy config JSON */
-    memcpy(pos + 9, config_json, config_len);
+
+    memmove(pos + prefix_len + raw_len, pos + search_len, tail_len + 1);
+    memcpy(pos + prefix_len, raw_json, raw_len);
+}
+
+void ws_sensor_json_set_config(char *json, size_t json_capacity, const char *config_json) {
+    ws_json_replace_null_raw(json, json_capacity, "config", config_json);
 }
 
 /*
