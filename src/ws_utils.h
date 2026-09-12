@@ -1039,7 +1039,11 @@ void ws_json_array_free(ws_json_array_builder_t *builder);
  * @param internal      true if internal sensor
  * @param location      Where the sensor is, from its config; NULL or
  *                      WS_LOC_UNDECLARED leaves the field null
- * @param timestamp     Unix timestamp of reading
+ * @param timestamp     Unix time at which the value was obtained, or the
+ *                      read failed. Stamp after the read, not before it: a
+ *                      read that retried is reported at the time it
+ *                      succeeded, and every driver does the same, so the
+ *                      field means one thing whichever driver wrote it
  * @return              0 on success, -1 on error (prototype not available, or
  *                      out of memory); output is then an empty string
  */
