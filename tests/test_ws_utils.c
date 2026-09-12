@@ -458,9 +458,9 @@ void test_set_config_still_works(void) {
 static ws_geolocation_t read_geo(const char *content) {
     ws_geolocation_t g;
     write_file(content);
-    setenv("WS_GEOLOCATION_FILE", temp_file_path, 1);
+    setenv("GEOLOC_FILE", temp_file_path, 1);
     ws_read_geolocation(&g);
-    unsetenv("WS_GEOLOCATION_FILE");
+    unsetenv("GEOLOC_FILE");
     return g;
 }
 
@@ -519,11 +519,11 @@ void test_geo_one_value_invalid(void) {
 
 void test_geo_missing_file(void) {
     ws_geolocation_t g;
-    setenv("WS_GEOLOCATION_FILE", "/nonexistent/ws-test-geolocation", 1);
+    setenv("GEOLOC_FILE", "/nonexistent/ws-test-geolocation", 1);
     /* Absent is not an error: an unsurveyed node is a normal state. */
     TEST_ASSERT_EQUAL_INT(0, ws_read_geolocation(&g));
     TEST_ASSERT_FALSE(g.valid);
-    unsetenv("WS_GEOLOCATION_FILE");
+    unsetenv("GEOLOC_FILE");
 }
 
 void test_geo_comment_only_file(void) {
@@ -588,10 +588,10 @@ void test_location_json_node_resolves(void) {
     const char *end = ws_json_object_end(json);
 
     write_file("51.496700\n-0.176400\n12.0\n");
-    setenv("WS_GEOLOCATION_FILE", temp_file_path, 1);
+    setenv("GEOLOC_FILE", temp_file_path, 1);
     ws_parse_sensor_location(json, end, &l);
     j = ws_location_json(&l);
-    unsetenv("WS_GEOLOCATION_FILE");
+    unsetenv("GEOLOC_FILE");
 
     TEST_ASSERT_NOT_NULL(j);
     TEST_ASSERT_EQUAL_STRING(
@@ -606,10 +606,10 @@ void test_location_json_node_unresolved_keeps_token(void) {
     const char *json = "{\"location\":\"{{node}}\"}";
     const char *end = ws_json_object_end(json);
 
-    setenv("WS_GEOLOCATION_FILE", "/nonexistent/ws-test-geolocation", 1);
+    setenv("GEOLOC_FILE", "/nonexistent/ws-test-geolocation", 1);
     ws_parse_sensor_location(json, end, &l);
     j = ws_location_json(&l);
-    unsetenv("WS_GEOLOCATION_FILE");
+    unsetenv("GEOLOC_FILE");
 
     TEST_ASSERT_NOT_NULL(j);
     TEST_ASSERT_EQUAL_STRING("\"{{node}}\"", j);
@@ -789,6 +789,35 @@ void test_read_file_with_size(void) {
 void test_read_file_not_found(void) {
     char *content = ws_read_file("/nonexistent/path", NULL);
     TEST_ASSERT_NULL(content);
+}
+
+/* ========== Unit canonicalisation Tests ========== */
+
+void test_unit_canonical_exact(void) {
+    TEST_ASSERT_EQUAL_STRING(WS_UNIT_CELSIUS,    ws_unit_canonical("Celsius"));
+    TEST_ASSERT_EQUAL_STRING(WS_UNIT_PERCENTAGE, ws_unit_canonical("percentage"));
+    TEST_ASSERT_EQUAL_STRING(WS_UNIT_HPA,        ws_unit_canonical("hPa"));
+    TEST_ASSERT_EQUAL_STRING(WS_UNIT_OHMS,       ws_unit_canonical("Ohms"));
+}
+
+/* A shell caller should not have to match our capitalisation. */
+void test_unit_canonical_ignores_case(void) {
+    TEST_ASSERT_EQUAL_STRING(WS_UNIT_CELSIUS,    ws_unit_canonical("celsius"));
+    TEST_ASSERT_EQUAL_STRING(WS_UNIT_CELSIUS,    ws_unit_canonical("CELSIUS"));
+    TEST_ASSERT_EQUAL_STRING(WS_UNIT_PERCENTAGE, ws_unit_canonical("PERCENTAGE"));
+    TEST_ASSERT_EQUAL_STRING(WS_UNIT_HPA,        ws_unit_canonical("hpa"));
+    TEST_ASSERT_EQUAL_STRING(WS_UNIT_OHMS,       ws_unit_canonical("ohms"));
+}
+
+/* The spellings that actually shipped wrong in this project, and near misses. */
+void test_unit_canonical_rejects_misspellings(void) {
+    TEST_ASSERT_NULL(ws_unit_canonical("percant"));
+    TEST_ASSERT_NULL(ws_unit_canonical("percent"));
+    TEST_ASSERT_NULL(ws_unit_canonical("C"));
+    TEST_ASSERT_NULL(ws_unit_canonical("degrees"));
+    TEST_ASSERT_NULL(ws_unit_canonical("ohm"));
+    TEST_ASSERT_NULL(ws_unit_canonical(""));
+    TEST_ASSERT_NULL(ws_unit_canonical(NULL));
 }
 
 /* ========== Sensor config iterator Tests ========== */
@@ -1293,6 +1322,11 @@ int main(void) {
     RUN_TEST(test_read_file_with_size);
     RUN_TEST(test_read_file_not_found);
     
+    /* Unit canonicalisation tests */
+    RUN_TEST(test_unit_canonical_exact);
+    RUN_TEST(test_unit_canonical_ignores_case);
+    RUN_TEST(test_unit_canonical_rejects_misspellings);
+
     /* Sensor config iterator tests */
     RUN_TEST(test_config_iter_missing_file_is_not_an_error);
     RUN_TEST(test_config_iter_null_path_rejected);

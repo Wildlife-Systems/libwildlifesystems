@@ -2,7 +2,7 @@ libwildlifesystems (1.3.0) stable; urgency=medium
 
   * Add ws_read_geolocation and ws_geolocation_geojson, reading the node's own
     position from /etc/geolocation in the GeoClue static-source format. Honours
-    $WS_GEOLOCATION_FILE, tolerates inline comments, stray whitespace, CRLF and
+    $GEOLOC_FILE, tolerates inline comments, stray whitespace, CRLF and
     fewer than four values, and treats a missing file as a normal state rather
     than an error
   * "{{node}}" now resolves on the node rather than being passed through for
@@ -10,6 +10,22 @@ libwildlifesystems (1.3.0) stable; urgency=medium
     so moving and re-surveying a node does not retrospectively relocate its own
     history. Where the node has no usable location the token is emitted
     unresolved, keeping the declaration rather than discarding it
+  * Add ws-emit, in a new wildlifesystems-tools binary package: a command that
+    turns readings described on its command line into reading JSON using this
+    library. It lets sensor-onboard, which is shell, emit exactly what the C
+    drivers emit instead of reimplementing the template in jq. Notably it gets
+    "{{node}}" resolution, which the C drivers gained in this release and the
+    shell driver could not have
+  * Add WS_UNIT_CELSIUS, WS_UNIT_PERCENTAGE, WS_UNIT_HPA and WS_UNIT_OHMS, with
+    ws_unit_canonical() to map a name to its canonical spelling case
+    insensitively. A unit is part of a datastream's identity downstream, so a
+    misspelling does not fail: it silently creates a second datastream for the
+    same quantity. That has happened twice here, as "percant" and as "percent"
+    where the other drivers said "percentage". ws-emit rejects an unknown unit
+    rather than passing it through, which extends the protection to callers that
+    are not C
+  * The Makefile passed -DVERSION unquoted, so any use of VERSION in C failed to
+    compile. Nothing had used it until ws-emit did
   * ws_sensor_config_base_t gains the location field and is now what drivers
     embed rather than redeclare. It had sat unused since 1.0 and had already
     fallen behind: when location was added it went into three private structs

@@ -6,6 +6,19 @@ Build-Depends: debhelper-compat (= 13)
 Standards-Version: 4.6.0
 Homepage: https://github.com/wildlifesystems/libwildlifesystems
 
+Package: wildlifesystems-tools
+Section: utils
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: WildlifeSystems shared sensor utilities - tools
+ ws-emit turns a reading described on the command line into WildlifeSystems
+ reading JSON, using the same library code as the C sensor drivers. It lets a
+ driver written in shell emit identical output instead of reimplementing the
+ sc-prototype template, the unit spellings and the location tokens in jq.
+ .
+ Deliberately does not depend on sensor-control, which provides sc-prototype at
+ runtime: that would be circular, since sensor-control depends on this package.
+
 Package: libwildlifesystems-dev
 Section: libdevel
 Architecture: any

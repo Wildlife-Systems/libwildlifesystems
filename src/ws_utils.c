@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>   /* strcasecmp, for ws_unit_canonical */
 #include <time.h>
 #include <syslog.h>
 #include "ws_utils.h"
@@ -23,6 +24,26 @@ static bool g_prototype_loaded = false;
 /* ============================================================================
  * Logging Functions
  * ============================================================================ */
+
+/* ============================================================================
+ * Units of measurement
+ * ============================================================================ */
+
+const char *ws_unit_canonical(const char *name) {
+    static const char *const units[] = {
+        WS_UNIT_CELSIUS, WS_UNIT_PERCENTAGE, WS_UNIT_HPA, WS_UNIT_OHMS
+    };
+    size_t i;
+
+    if (!name || !*name) return NULL;
+
+    for (i = 0; i < sizeof(units) / sizeof(units[0]); i++) {
+        if (strcasecmp(name, units[i]) == 0) {
+            return units[i];
+        }
+    }
+    return NULL;
+}
 
 /*
  * Initialize syslog for a sensor program.
@@ -669,8 +690,10 @@ int ws_read_geolocation(ws_geolocation_t *out) {
     if (!out) return -1;
     memset(out, 0, sizeof(*out));
 
-    path = getenv("WS_GEOLOCATION_FILE");
-    if (!path || !*path) path = WS_GEOLOCATION_FILE_DEFAULT;
+    /* GEOLOC_FILE, not a WS_-prefixed name: pi-geo established this override
+       first and the two must agree. */
+    path = getenv("GEOLOC_FILE");
+    if (!path || !*path) path = WS_GEOLOC_FILE_DEFAULT;
 
     buffer = ws_read_file(path, NULL);
     if (!buffer) {

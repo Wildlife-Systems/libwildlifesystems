@@ -33,6 +33,34 @@ typedef enum {
     WS_LOCATION_EXTERNAL
 } ws_location_filter_t;
 
+/* ============================================================================
+ * Units of measurement
+ * ============================================================================
+ * A unit is part of a Datastream's identity downstream, so a misspelling does
+ * not fail: it silently creates a second Datastream for the same quantity and
+ * splits the series. That has happened twice in this project ("percant", and
+ * "percent" where others said "percentage"), so the spellings live here rather
+ * than as a literal at each call site.
+ */
+#define WS_UNIT_CELSIUS    "Celsius"
+#define WS_UNIT_PERCENTAGE "percentage"
+#define WS_UNIT_HPA        "hPa"
+#define WS_UNIT_OHMS       "Ohms"
+
+/*
+ * Map a unit name to its canonical spelling.
+ *
+ * Matching ignores case, so "celsius", "Celsius" and "CELSIUS" all give
+ * WS_UNIT_CELSIUS. For callers outside C - a shell script passing a unit on a
+ * command line - this turns a typo into a rejection rather than a second
+ * Datastream.
+ *
+ * @param name  Unit name to look up
+ * @return      Canonical spelling (a WS_UNIT_* constant), or NULL if the name
+ *              is not a known unit
+ */
+const char *ws_unit_canonical(const char *name);
+
 /* Config path macro - generates "/etc/ws/sensors/<name>.json" */
 #define WS_CONFIG_PATH(name) "/etc/ws/sensors/" name ".json"
 
@@ -342,7 +370,7 @@ char *ws_get_serial_with_suffix(const char *suffix);
  * altitude, accuracy. '#' starts a comment; blank lines are ignored.
  */
 
-#define WS_GEOLOCATION_FILE_DEFAULT "/etc/geolocation"
+#define WS_GEOLOC_FILE_DEFAULT "/etc/geolocation"
 
 typedef struct {
     double latitude;      /* WGS84 decimal degrees, + = north */
@@ -355,7 +383,7 @@ typedef struct {
 } ws_geolocation_t;
 
 /*
- * Read the node's location from $WS_GEOLOCATION_FILE, default /etc/geolocation.
+ * Read the node's location from $GEOLOC_FILE, default /etc/geolocation.
  *
  * Tolerates the real-world GeoClue file: inline '#' comments, leading and
  * trailing whitespace, CRLF line endings, and fewer than four values. Latitude

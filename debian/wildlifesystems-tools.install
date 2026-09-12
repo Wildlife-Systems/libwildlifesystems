@@ -1,0 +1,2 @@
+usr/bin/ws-emit
+debian/ws-emit.1 usr/share/man/man1

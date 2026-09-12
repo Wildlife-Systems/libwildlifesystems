@@ -1,0 +1,158 @@
+.TH WS-EMIT 1 "September 2026" "wildlifesystems-tools" "WildlifeSystems"
+.SH NAME
+ws-emit \- emit sensor readings as WildlifeSystems JSON
+.SH SYNOPSIS
+.B ws-emit
+.RI [ "common options" ]
+.B \-\-
+.RI < reading >
+.RI [ \-\- " " < reading > ...]
+.br
+.B ws-emit
+.BR \-\-version | \-\-help
+.SH DESCRIPTION
+.B ws-emit
+turns one or more readings described on the command line into a JSON array in
+the WildlifeSystems reading format, and writes it to standard output.
+.PP
+It exists so that a sensor driver written in shell emits exactly what the C
+drivers emit. Rather than reimplementing the
+.BR sc\-prototype (1)
+template, the field substitution, the unit spellings and the location tokens in
+.BR jq (1),
+a shell driver describes its readings and
+.B ws-emit
+produces them using the same
+.B libwildlifesystems
+code the C drivers use. A change in the library therefore reaches the shell
+drivers and the C drivers together.
+.PP
+All readings in one invocation share a timestamp, since they are taken together.
+.SH COMMON OPTIONS
+These apply to every reading.
+.TP
+.BI \-\-device " NAME"
+Physical device model, for example
+.IR raspberry_pi .
+Identifies the sensor hardware, as distinct from
+.BR \-\-sensor .
+.TP
+.BI \-\-prefix " ID"
+Prefix for each reading's
+.IR sensor_id ,
+which becomes
+.IR PREFIX_<sensor> .
+Typically the node serial number.
+.TP
+.BI \-\-name " NAME"
+Human-readable
+.I sensor_name
+for every reading.
+.TP
+.B \-\-internal
+Mark every reading as internal to the enclosure.
+.SH READING OPTIONS
+Each reading follows a
+.B \-\-
+separator.
+.TP
+.BI \-\-sensor " NAME"
+Sensor name, for example
+.IR onboard_cpu .
+Required.
+.TP
+.BI \-\-measures " NAME"
+Quantity measured, for example
+.IR temperature .
+Required.
+.TP
+.BI \-\-unit " NAME"
+Unit of measurement: one of
+.IR celsius ,
+.IR percentage ,
+.IR hPa ,
+.IR Ohms .
+Matching ignores case and the canonical spelling is emitted. An unrecognised
+unit is an error rather than being passed through, because a misspelled unit
+silently creates a second datastream for the same quantity. Required.
+.TP
+.BI \-\-value " NUM"
+The reading. Required unless
+.B \-\-error
+is given.
+.TP
+.BI \-\-precision " N"
+Decimal places for the value, 0 to 10. Defaults to 3.
+.TP
+.BI \-\-location " TOKEN"
+Either
+.I {{node}}
+for a sensor at the node's own position, or
+.I {{none}}
+for one that deliberately has none.
+.I {{node}}
+is resolved to the node's coordinates where they are known. Omit the option to
+leave the location undeclared. Explicit coordinates are not accepted here; they
+belong in a sensor's configuration file.
+.TP
+.BI \-\-id " ID"
+Explicit
+.IR sensor_id ,
+overriding
+.BR \-\-prefix .
+.TP
+.BI \-\-error " MSG"
+Report a failed reading:
+.I error
+carries the message and
+.I value
+is left null. A reading never carries both.
+.SH EXIT STATUS
+.TP
+.B 0
+The readings were emitted.
+.TP
+.B 20
+A usage error, an unknown unit or location, a non-numeric value, or
+.B sc\-prototype
+was unavailable. Nothing is written to standard output in this case.
+.SH EXAMPLES
+Two readings from one call, sharing a device, prefix and internal flag:
+.PP
+.nf
+.RS
+ws-emit --device raspberry_pi --internal --prefix "$SERIAL" \\
+  -- --sensor onboard_cpu --measures temperature --unit celsius \\
+     --value 47 --precision 0 --location '{{node}}' \\
+  -- --sensor memory_used --measures memory --unit percentage \\
+     --value 31 --precision 0 --location '{{none}}'
+.RE
+.fi
+.PP
+A sensor that could not be read:
+.PP
+.nf
+.RS
+ws-emit --prefix "$SERIAL" \\
+  -- --sensor onboard_gpu --measures temperature --unit celsius \\
+     --error 'vcgencmd not available'
+.RE
+.fi
+.SH ENVIRONMENT
+.TP
+.B GEOLOC_FILE
+Overrides the default
+.I /etc/geolocation
+when resolving
+.IR {{node}} .
+.SH FILES
+.TP
+.I /etc/geolocation
+The node's own position, in the GeoClue static-source format, used to resolve
+.IR {{node}} .
+.SH SEE ALSO
+.BR sc\-prototype (1),
+.BR sensor\-onboard (1),
+.BR sr (1)
+.SH AUTHOR
+Ed Baker <ed@ebaker.me.uk>
