@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <sys/stat.h>   /* chmod, for the unreadable-file test */
+#include <fcntl.h>      /* open, to silence stderr in one test */
 #include <math.h>
 
 #include "unity.h"
@@ -885,9 +886,19 @@ void test_location_null_output_rejected(void) {
 
 /* ========== Location JSON Tests ========== */
 
+/* The token form parses to WS_LOC_NODE and, with no node location to resolve
+   against, is emitted unchanged. GEOLOC_FILE is pointed away from the host's
+   own /etc/geolocation: a build machine that has been surveyed would otherwise
+   resolve the token to its real coordinates, which is right, and fail the
+   test, which is not. */
 void test_location_json_node(void) {
     ws_location_t l = parse_loc("{\"location\":\"{{node}}\"}");
-    char *j = ws_location_json(&l);
+    char *j;
+
+    setenv("GEOLOC_FILE", "/nonexistent/ws-test-geolocation", 1);
+    j = ws_location_json(&l);
+    unsetenv("GEOLOC_FILE");
+
     TEST_ASSERT_NOT_NULL(j);
     TEST_ASSERT_EQUAL_STRING("\"{{node}}\"", j);
     free(j);
@@ -1379,14 +1390,30 @@ void test_set_error_null_message_is_noop(void) {
 void test_require_prototype_fails_without_sc_prototype(void) {
     const char *old_path = getenv("PATH");
     char saved[1024];
+    int saved_stderr;
+    int devnull;
+    int rc;
 
     snprintf(saved, sizeof(saved), "%s", old_path ? old_path : "");
     make_fake_bin_dir();          /* exists, but holds no sc-prototype yet */
     setenv("PATH", fake_bin_dir, 1);
 
-    TEST_ASSERT_EQUAL_INT(WS_EXIT_INVALID_ARG, ws_require_prototype());
+    /* The shell's "not found" and the library's error line are the point of
+       the test, not a problem with the build, so keep them out of the build
+       log: a package build that prints "Error: sc-prototype failed" and then
+       succeeds reads as a build that lies. */
+    fflush(stderr);
+    saved_stderr = dup(2);
+    devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) { dup2(devnull, 2); close(devnull); }
 
+    rc = ws_require_prototype();
+
+    fflush(stderr);
+    if (saved_stderr >= 0) { dup2(saved_stderr, 2); close(saved_stderr); }
     setenv("PATH", saved, 1);
+
+    TEST_ASSERT_EQUAL_INT(WS_EXIT_INVALID_ARG, rc);
 }
 
 void test_require_prototype_succeeds_when_available(void) {

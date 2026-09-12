@@ -1,5 +1,10 @@
 libwildlifesystems (1.3.0) stable; urgency=medium
 
+  * The unit tests no longer depend on the build host. One test assumed the
+    host had no /etc/geolocation and failed on any surveyed node, which is
+    where the package is built; it now points GEOLOC_FILE away from the host.
+    The negative sc-prototype test silences the "not found" it provokes, so
+    a package build log does not show an error from a test that passed
   * Add a "make test" target that runs the unit tests, and have "make clean"
     clean them. The tests had no entry point from the library's Makefile, so
     nothing above it could run them
