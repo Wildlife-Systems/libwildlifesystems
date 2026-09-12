@@ -1,5 +1,10 @@
 libwildlifesystems (1.3.0) stable; urgency=medium
 
+  * ws_mock_reading_t gains a location token, so a driver's mock readings
+    declare a location as sensor-onboard's already did and a mock has the
+    same shape as a real read; the C drivers' mocks emitted location null.
+    The token is parsed by the new ws_location_from_token(), which ws-emit now
+    uses for --location in place of its own copy of the same code
   * ws-emit: a reading may carry its own --device, overriding the common one,
     and an empty name means it has none. sensor-onboard could not otherwise
     stop tagging storage_used and memory_used with raspberry_pi, which its

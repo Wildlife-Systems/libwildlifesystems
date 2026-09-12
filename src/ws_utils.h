@@ -295,6 +295,11 @@ typedef struct {
     const char *unit;       /* A WS_UNIT_* constant */
     double value;           /* The value to report */
     int precision;          /* Decimal places */
+    const char *location;   /* "{{node}}", "{{none}}", or NULL for undeclared.
+                               A real reading takes this from its config; a
+                               mock declares it here, so a mock reading has the
+                               same shape as a real one. sensor-onboard's mock
+                               declares its physical sensors at the node */
 } ws_mock_reading_t;
 
 /*
@@ -308,7 +313,9 @@ typedef struct {
  * serial_suffix as the id: mock exists to work without the hardware.
  *
  * Prints nothing and fails if the template is unavailable, rather than emitting
- * an empty array that would read as "this node has no sensors".
+ * an empty array that would read as "this node has no sensors". A reading
+ * whose location token is not one of the two accepted is likewise an error: it
+ * is a mistake in the driver's own table.
  *
  * @param device        Physical device model, e.g. "dht11", or NULL
  * @param serial_suffix Suffix for the Pi serial, e.g. "dht11_mock"
@@ -570,6 +577,23 @@ typedef struct {
  * @return      0 on success, -1 on bad arguments
  */
 int ws_parse_sensor_location(const char *ptr, const char *end, ws_location_t *out);
+
+/*
+ * Parse a location token into the library's location type.
+ *
+ * Accepts "{{node}}", "{{none}}", and NULL or "" for an undeclared location.
+ * Only the tokens: explicit coordinates belong in a sensor's config file,
+ * where ws_parse_sensor_location() reads them, and accepting them here would
+ * put a second place to get coordinate order wrong. Used by ws-emit for its
+ * --location option and by ws_cmd_mock() for a driver's mock table, so the
+ * two cannot disagree about what a token means.
+ *
+ * @param token  The token, or NULL
+ * @param out    Populated on return; zeroed first
+ * @return       0 on success, -1 if out is NULL or the token is unrecognised
+ *               (which is logged)
+ */
+int ws_location_from_token(const char *token, ws_location_t *out);
 
 /*
  * Render a location as the JSON value for a reading's "location" field.

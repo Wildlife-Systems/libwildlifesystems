@@ -433,6 +433,7 @@ int ws_cmd_mock(const char *device, const char *serial_suffix,
         const ws_mock_reading_t *r = &readings[i];
         char reading[2048];
         char sensor_id[256];
+        ws_location_t location;
 
         {
             /* An empty suffix means the driver identifies the sensor without
@@ -445,9 +446,18 @@ int ws_cmd_mock(const char *device, const char *serial_suffix,
             }
         }
 
+        /* The location the driver's table declares, so a mock reading has
+           the shape a real one does. A bad token is a mistake in the table,
+           so it fails the command rather than being quietly dropped. */
+        if (ws_location_from_token(r->location, &location) != 0) {
+            ws_json_array_free(&out);
+            free(serial);
+            return WS_EXIT_INVALID_ARG;
+        }
+
         if (ws_build_sensor_json_base(reading, sizeof(reading), r->sensor, device,
                                       r->measures, r->unit, sensor_id, sensor_name,
-                                      false, NULL, now) != 0) {
+                                      false, &location, now) != 0) {
             ws_log_error("sc-prototype failed - cannot generate JSON");
             ws_json_array_free(&out);
             free(serial);
@@ -1067,6 +1077,29 @@ int ws_parse_sensor_location(const char *ptr, const char *end, ws_location_t *ou
         ws_log_info("No location declared for this sensor; publishing none");
     }
     return 0;
+}
+
+/*
+ * Parse a location token: "{{node}}", "{{none}}", or nothing.
+ */
+int ws_location_from_token(const char *token, ws_location_t *out) {
+    if (!out) return -1;
+
+    memset(out, 0, sizeof(*out));
+    out->source = WS_LOC_UNDECLARED;
+
+    if (!token || !*token) return 0;
+    if (strcmp(token, "{{node}}") == 0) {
+        out->source = WS_LOC_NODE;
+        return 0;
+    }
+    if (strcmp(token, "{{none}}") == 0) {
+        out->source = WS_LOC_NONE;
+        return 0;
+    }
+
+    ws_log_error("Unknown location %s; expected {{node}} or {{none}}", token);
+    return -1;
 }
 
 /*

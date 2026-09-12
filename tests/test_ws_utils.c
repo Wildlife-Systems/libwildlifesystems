@@ -1022,6 +1022,108 @@ void test_location_json_null_input(void) {
     TEST_ASSERT_NULL(ws_location_json(NULL));
 }
 
+/* ========== Location token Tests ========== */
+
+void test_location_from_token_node(void) {
+    ws_location_t l;
+    TEST_ASSERT_EQUAL_INT(0, ws_location_from_token("{{node}}", &l));
+    TEST_ASSERT_EQUAL_INT(WS_LOC_NODE, l.source);
+}
+
+void test_location_from_token_none(void) {
+    ws_location_t l;
+    TEST_ASSERT_EQUAL_INT(0, ws_location_from_token("{{none}}", &l));
+    TEST_ASSERT_EQUAL_INT(WS_LOC_NONE, l.source);
+}
+
+void test_location_from_token_absent_is_undeclared(void) {
+    ws_location_t l;
+    TEST_ASSERT_EQUAL_INT(0, ws_location_from_token(NULL, &l));
+    TEST_ASSERT_EQUAL_INT(WS_LOC_UNDECLARED, l.source);
+    TEST_ASSERT_EQUAL_INT(0, ws_location_from_token("", &l));
+    TEST_ASSERT_EQUAL_INT(WS_LOC_UNDECLARED, l.source);
+}
+
+/* A typo must fail, not silently become "undeclared": the caller is a driver's
+   own mock table or ws-emit's command line, and both are mistakes to correct. */
+void test_location_from_token_unknown_is_an_error(void) {
+    ws_location_t l;
+    TEST_ASSERT_EQUAL_INT(-1, ws_location_from_token("{{somewhere}}", &l));
+    TEST_ASSERT_EQUAL_INT(WS_LOC_UNDECLARED, l.source);
+    TEST_ASSERT_EQUAL_INT(-1, ws_location_from_token("{{node}}", NULL));
+}
+
+/* ws_cmd_mock writes to stdout, so capture it through a temp file. With no
+   node location to resolve against, "{{node}}" comes through as the token. */
+static char *capture_mock(const ws_mock_reading_t *readings, size_t count,
+                          int *rc) {
+    int saved_stdout, saved_stderr;
+    int fd;
+    char *content;
+
+    install_fake_prototype();
+    setenv("GEOLOC_FILE", "/nonexistent/ws-test-geolocation", 1);
+
+    /* stdout to the temp file to be read back; stderr to /dev/null so a
+       deliberately bad table does not print an error into a build log. */
+    fflush(stdout);
+    fflush(stderr);
+    saved_stdout = dup(1);
+    saved_stderr = dup(2);
+    fd = open(temp_file_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) { dup2(fd, 1); close(fd); }
+    fd = open("/dev/null", O_WRONLY);
+    if (fd >= 0) { dup2(fd, 2); close(fd); }
+
+    *rc = ws_cmd_mock("dev", "dev_mock", "Mock dev", readings, count);
+
+    fflush(stdout);
+    fflush(stderr);
+    if (saved_stdout >= 0) { dup2(saved_stdout, 1); close(saved_stdout); }
+    if (saved_stderr >= 0) { dup2(saved_stderr, 2); close(saved_stderr); }
+    unsetenv("GEOLOC_FILE");
+
+    content = ws_read_file(temp_file_path, NULL);
+    return content ? content : strdup("");
+}
+
+/* A mock reading carries the location its table declares, so a mock has the
+   same shape as a real read: sensor-onboard's mock declared locations while
+   the C drivers' emitted null, and the two had to agree. */
+void test_cmd_mock_declares_locations(void) {
+    static const ws_mock_reading_t mock[] = {
+        { "dev_temperature", "temperature", NULL, WS_UNIT_CELSIUS,    22.0, 1, "{{node}}" },
+        { "dev_storage",     "storage",     NULL, WS_UNIT_PERCENTAGE, 31.0, 0, "{{none}}" },
+        { "dev_other",       "humidity",    NULL, WS_UNIT_PERCENTAGE, 55.0, 1, NULL },
+    };
+    int rc;
+    char *out = capture_mock(mock, 3, &rc);
+
+    TEST_ASSERT_EQUAL_INT(WS_EXIT_SUCCESS, rc);
+    TEST_ASSERT_NOT_NULL(strstr(out,
+        "\"sensor_id\":\"dev_mock_temperature\",\"sensor_name\":\"Mock dev\","
+        "\"location\":\"{{node}}\""));
+    TEST_ASSERT_NOT_NULL(strstr(out,
+        "\"sensor_id\":\"dev_mock_storage\",\"sensor_name\":\"Mock dev\","
+        "\"location\":\"{{none}}\""));
+    TEST_ASSERT_NOT_NULL(strstr(out,
+        "\"sensor_id\":\"dev_mock_humidity\",\"sensor_name\":\"Mock dev\","
+        "\"location\":null"));
+    free(out);
+}
+
+void test_cmd_mock_rejects_bad_location_token(void) {
+    static const ws_mock_reading_t mock[] = {
+        { "dev_temperature", "temperature", NULL, WS_UNIT_CELSIUS, 22.0, 1, "{{typo}}" },
+    };
+    int rc;
+    char *out = capture_mock(mock, 1, &rc);
+
+    TEST_ASSERT_EQUAL_INT(WS_EXIT_INVALID_ARG, rc);
+    TEST_ASSERT_EQUAL_STRING("", out);   /* nothing printed */
+    free(out);
+}
+
 /* ========== File Reading Tests ========== */
 
 void test_read_file_success(void) {
@@ -1915,6 +2017,10 @@ int main(void) {
     RUN_TEST(test_geolocation_json_accuracy_becomes_a_feature);
     RUN_TEST(test_geolocation_json_without_accuracy_is_null);
     RUN_TEST(test_location_json_null_input);
+    RUN_TEST(test_location_from_token_node);
+    RUN_TEST(test_location_from_token_none);
+    RUN_TEST(test_location_from_token_absent_is_undeclared);
+    RUN_TEST(test_location_from_token_unknown_is_an_error);
 
     RUN_TEST(test_read_file_success);
     RUN_TEST(test_read_file_with_size);
@@ -1964,6 +2070,8 @@ int main(void) {
     RUN_TEST(test_build_reading_escapes_sensor_name);
     RUN_TEST(test_build_reading_refuses_oversized_escaped_value);
     RUN_TEST(test_build_reading_null_strings_stay_null);
+    RUN_TEST(test_cmd_mock_declares_locations);
+    RUN_TEST(test_cmd_mock_rejects_bad_location_token);
 
     /* Reading outcome tests */
     RUN_TEST(test_set_result_success_sets_value_only);

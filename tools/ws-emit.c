@@ -80,33 +80,6 @@ static void usage(void) {
 }
 
 /*
- * Turn a --location token into the library's location type.
- *
- * Only the two tokens are accepted. Explicit coordinates belong in a sensor's
- * config file, which a shell driver does not have, and accepting them here
- * would put a second place to get coordinate order wrong on the command line.
- */
-static int parse_location(const char *token, ws_location_t *out) {
-    memset(out, 0, sizeof(*out));
-
-    if (!token || !*token) {
-        out->source = WS_LOC_UNDECLARED;
-        return 0;
-    }
-    if (strcmp(token, "{{node}}") == 0) {
-        out->source = WS_LOC_NODE;
-        return 0;
-    }
-    if (strcmp(token, "{{none}}") == 0) {
-        out->source = WS_LOC_NONE;
-        return 0;
-    }
-
-    ws_log_error("Unknown location %s; expected {{node}} or {{none}}", token);
-    return -1;
-}
-
-/*
  * The reading's sensor_id: --id if given, else <prefix>_<sensor>, else none.
  *
  * None is deliberate. With neither a prefix nor an explicit id there is
@@ -229,7 +202,8 @@ int main(int argc, char *argv[]) {
                     return WS_EXIT_INVALID_ARG;
                 }
             } else if (strcmp(argv[i], "--location") == 0) {
-                if (parse_location(argv[++i], &r->location) != 0) {
+                /* Tokens only; the library says which, and logs a bad one. */
+                if (ws_location_from_token(argv[++i], &r->location) != 0) {
                     return WS_EXIT_INVALID_ARG;
                 }
             } else if (strcmp(argv[i], "--id") == 0) {
