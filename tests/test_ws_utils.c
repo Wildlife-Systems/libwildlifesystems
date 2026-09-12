@@ -452,6 +452,170 @@ void test_set_config_still_works(void) {
         "{\"value\":1,\"config\":{\"software_version\":\"1.0\"},\"error\":null}", json);
 }
 
+/* ========== Node Geolocation Tests ========== */
+
+/* Write a geolocation file and point the reader at it. */
+static ws_geolocation_t read_geo(const char *content) {
+    ws_geolocation_t g;
+    write_file(content);
+    setenv("WS_GEOLOCATION_FILE", temp_file_path, 1);
+    ws_read_geolocation(&g);
+    unsetenv("WS_GEOLOCATION_FILE");
+    return g;
+}
+
+void test_geo_full_four_values(void) {
+    ws_geolocation_t g = read_geo("51.4967\n-0.1764\n12.0\n5.0\n");
+    TEST_ASSERT_TRUE(g.valid);
+    TEST_ASSERT_EQUAL_FLOAT(51.4967, g.latitude, 1e-9);
+    TEST_ASSERT_EQUAL_FLOAT(-0.1764, g.longitude, 1e-9);
+    TEST_ASSERT_TRUE(g.has_altitude);
+    TEST_ASSERT_TRUE(g.has_accuracy);
+    TEST_ASSERT_EQUAL_FLOAT(12.0, g.altitude, 1e-9);
+    TEST_ASSERT_EQUAL_FLOAT(5.0, g.accuracy, 1e-9);
+}
+
+/* The real GeoClue file has inline comments and stray whitespace. */
+void test_geo_comments_and_whitespace(void) {
+    ws_geolocation_t g = read_geo(
+        "# WildlifeSystems node location\n"
+        "   51.4967   # latitude\n"
+        "\n"
+        "-0.1764\t# longitude\n"
+        "12.0 # altitude\n"
+        "5.0  # accuracy\n");
+    TEST_ASSERT_TRUE(g.valid);
+    TEST_ASSERT_EQUAL_FLOAT(51.4967, g.latitude, 1e-9);
+    TEST_ASSERT_EQUAL_FLOAT(-0.1764, g.longitude, 1e-9);
+}
+
+void test_geo_crlf(void) {
+    ws_geolocation_t g = read_geo("51.4967\r\n-0.1764\r\n12.0\r\n5.0\r\n");
+    TEST_ASSERT_TRUE(g.valid);
+    TEST_ASSERT_EQUAL_FLOAT(51.4967, g.latitude, 1e-9);
+    TEST_ASSERT_EQUAL_FLOAT(12.0, g.altitude, 1e-9);
+}
+
+/* Fewer than four values: altitude and accuracy simply unknown. */
+void test_geo_lat_lon_only(void) {
+    ws_geolocation_t g = read_geo("51.4967\n-0.1764\n");
+    TEST_ASSERT_TRUE(g.valid);
+    TEST_ASSERT_FALSE(g.has_altitude);
+    TEST_ASSERT_FALSE(g.has_accuracy);
+}
+
+void test_geo_three_values(void) {
+    ws_geolocation_t g = read_geo("51.4967\n-0.1764\n12.0\n");
+    TEST_ASSERT_TRUE(g.valid);
+    TEST_ASSERT_TRUE(g.has_altitude);
+    TEST_ASSERT_FALSE(g.has_accuracy);
+}
+
+/* Latitude alone is not a location. */
+void test_geo_one_value_invalid(void) {
+    ws_geolocation_t g = read_geo("51.4967\n");
+    TEST_ASSERT_FALSE(g.valid);
+}
+
+void test_geo_missing_file(void) {
+    ws_geolocation_t g;
+    setenv("WS_GEOLOCATION_FILE", "/nonexistent/ws-test-geolocation", 1);
+    /* Absent is not an error: an unsurveyed node is a normal state. */
+    TEST_ASSERT_EQUAL_INT(0, ws_read_geolocation(&g));
+    TEST_ASSERT_FALSE(g.valid);
+    unsetenv("WS_GEOLOCATION_FILE");
+}
+
+void test_geo_comment_only_file(void) {
+    ws_geolocation_t g = read_geo("# nothing here yet\n\n");
+    TEST_ASSERT_FALSE(g.valid);
+}
+
+void test_geo_latitude_out_of_range(void) {
+    ws_geolocation_t g = read_geo("91.0\n-0.1764\n");
+    TEST_ASSERT_FALSE(g.valid);
+}
+
+void test_geo_longitude_out_of_range(void) {
+    ws_geolocation_t g = read_geo("51.4967\n-181.0\n");
+    TEST_ASSERT_FALSE(g.valid);
+}
+
+void test_geo_negative_accuracy(void) {
+    ws_geolocation_t g = read_geo("51.4967\n-0.1764\n12.0\n-1.0\n");
+    TEST_ASSERT_FALSE(g.valid);
+}
+
+void test_geo_zero_coordinates_valid(void) {
+    ws_geolocation_t g = read_geo("0\n0\n");
+    TEST_ASSERT_TRUE(g.valid);
+}
+
+void test_geo_null_output_rejected(void) {
+    TEST_ASSERT_EQUAL_INT(-1, ws_read_geolocation(NULL));
+}
+
+void test_geo_geojson_lon_lat_order(void) {
+    ws_geolocation_t g = read_geo("51.496700\n-0.176400\n12.0\n");
+    char *j = ws_geolocation_geojson(&g);
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700,12.00]}", j);
+    free(j);
+}
+
+void test_geo_geojson_no_altitude(void) {
+    ws_geolocation_t g = read_geo("51.496700\n-0.176400\n");
+    char *j = ws_geolocation_geojson(&g);
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700]}", j);
+    free(j);
+}
+
+void test_geo_geojson_invalid_is_null(void) {
+    ws_geolocation_t g;
+    memset(&g, 0, sizeof(g));
+    TEST_ASSERT_NULL(ws_geolocation_geojson(&g));
+    TEST_ASSERT_NULL(ws_geolocation_geojson(NULL));
+}
+
+/* {{node}} resolves to the node's position at read time. */
+void test_location_json_node_resolves(void) {
+    ws_location_t l;
+    char *j;
+    const char *json = "{\"location\":\"{{node}}\"}";
+    const char *end = ws_json_object_end(json);
+
+    write_file("51.496700\n-0.176400\n12.0\n");
+    setenv("WS_GEOLOCATION_FILE", temp_file_path, 1);
+    ws_parse_sensor_location(json, end, &l);
+    j = ws_location_json(&l);
+    unsetenv("WS_GEOLOCATION_FILE");
+
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700,12.00]}", j);
+    free(j);
+}
+
+/* With no node location, the token survives rather than being dropped. */
+void test_location_json_node_unresolved_keeps_token(void) {
+    ws_location_t l;
+    char *j;
+    const char *json = "{\"location\":\"{{node}}\"}";
+    const char *end = ws_json_object_end(json);
+
+    setenv("WS_GEOLOCATION_FILE", "/nonexistent/ws-test-geolocation", 1);
+    ws_parse_sensor_location(json, end, &l);
+    j = ws_location_json(&l);
+    unsetenv("WS_GEOLOCATION_FILE");
+
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING("\"{{node}}\"", j);
+    free(j);
+}
+
 /* ========== Sensor Location Tests ========== */
 
 /* Parse the "location" field of a one-entry config object. */
@@ -902,6 +1066,25 @@ int main(void) {
     RUN_TEST(test_replace_null_raw_not_null);
     RUN_TEST(test_replace_null_raw_too_long_refused);
     RUN_TEST(test_set_config_still_works);
+
+    RUN_TEST(test_geo_full_four_values);
+    RUN_TEST(test_geo_comments_and_whitespace);
+    RUN_TEST(test_geo_crlf);
+    RUN_TEST(test_geo_lat_lon_only);
+    RUN_TEST(test_geo_three_values);
+    RUN_TEST(test_geo_one_value_invalid);
+    RUN_TEST(test_geo_missing_file);
+    RUN_TEST(test_geo_comment_only_file);
+    RUN_TEST(test_geo_latitude_out_of_range);
+    RUN_TEST(test_geo_longitude_out_of_range);
+    RUN_TEST(test_geo_negative_accuracy);
+    RUN_TEST(test_geo_zero_coordinates_valid);
+    RUN_TEST(test_geo_null_output_rejected);
+    RUN_TEST(test_geo_geojson_lon_lat_order);
+    RUN_TEST(test_geo_geojson_no_altitude);
+    RUN_TEST(test_geo_geojson_invalid_is_null);
+    RUN_TEST(test_location_json_node_resolves);
+    RUN_TEST(test_location_json_node_unresolved_keeps_token);
 
     RUN_TEST(test_location_node_token);
     RUN_TEST(test_location_none_token);

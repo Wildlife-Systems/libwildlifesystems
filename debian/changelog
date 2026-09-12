@@ -1,3 +1,22 @@
+libwildlifesystems (1.3.0) stable; urgency=medium
+
+  * Add ws_read_geolocation and ws_geolocation_geojson, reading the node's own
+    position from /etc/geolocation in the GeoClue static-source format. Honours
+    $WS_GEOLOCATION_FILE, tolerates inline comments, stray whitespace, CRLF and
+    fewer than four values, and treats a missing file as a normal state rather
+    than an error
+  * "{{node}}" now resolves on the node rather than being passed through for
+    the server to dereference. A reading carries the position it was taken at,
+    so moving and re-surveying a node does not retrospectively relocate its own
+    history. Where the node has no usable location the token is emitted
+    unresolved, keeping the declaration rather than discarding it
+  * ws_parse_sensor_location logs when a sensor declares no location, so an
+    unconfigured sensor is distinguishable from one whose config was never
+    read. Syslog only: it fires once per sensor per read cycle and would
+    otherwise fill the per-driver stderr log
+
+ -- Ed Baker <edwbaker@gmail.com>  Sat, 12 Sep 2026 10:00:00 +0000
+
 libwildlifesystems (1.2.0) stable; urgency=medium
 
   * Add ws_json_object_end for brace-matched object bounds

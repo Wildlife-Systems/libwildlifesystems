@@ -338,6 +338,53 @@ double ws_json_parse_double(const char *ptr, const char *end, const char *field,
 char *ws_get_serial_with_suffix(const char *suffix);
 
 /* ============================================================================
+ * Node Location
+ * ============================================================================
+ * Where the node itself is, from /etc/geolocation. This is the static location
+ * file read by GeoClue's static source, so the format is not ours to change:
+ * four numeric values, one per line, in the order latitude, longitude,
+ * altitude, accuracy. '#' starts a comment; blank lines are ignored.
+ */
+
+#define WS_GEOLOCATION_FILE_DEFAULT "/etc/geolocation"
+
+typedef struct {
+    double latitude;      /* WGS84 decimal degrees, + = north */
+    double longitude;     /* WGS84 decimal degrees, + = east */
+    double altitude;      /* metres; valid only if has_altitude */
+    double accuracy;      /* metres, radius; valid only if has_accuracy */
+    bool   has_altitude;
+    bool   has_accuracy;
+    bool   valid;         /* false if the file is absent or unusable */
+} ws_geolocation_t;
+
+/*
+ * Read the node's location from $WS_GEOLOCATION_FILE, default /etc/geolocation.
+ *
+ * Tolerates the real-world GeoClue file: inline '#' comments, leading and
+ * trailing whitespace, CRLF line endings, and fewer than four values. Latitude
+ * and longitude are required; altitude and accuracy are optional.
+ *
+ * A missing file is not an error - it leaves out->valid false, because a node
+ * that has not been surveyed is a normal state, not a failure. Values that are
+ * present but out of range are rejected loudly, since emitting a bad position
+ * is worse than emitting none.
+ *
+ * @param out   Populated on return; zeroed first
+ * @return      0 on success (including "file absent"), -1 on bad arguments
+ */
+int ws_read_geolocation(ws_geolocation_t *out);
+
+/*
+ * Render a node location as a GeoJSON Point.
+ * NOTE: GeoJSON coordinate order is [longitude, latitude, altitude].
+ *
+ * @param g     Location to render
+ * @return      Allocated JSON, or NULL if g is NULL or not valid. Caller frees.
+ */
+char *ws_geolocation_geojson(const ws_geolocation_t *g);
+
+/* ============================================================================
  * Sensor Location
  * ============================================================================
  * Where a sensor physically sits, from the "location" key of its entry in
@@ -392,7 +439,10 @@ int ws_parse_sensor_location(const char *ptr, const char *end, ws_location_t *ou
 /*
  * Render a location as the JSON value for a reading's "location" field.
  *
- * WS_LOC_NODE       -> "\"{{node}}\""
+ * WS_LOC_NODE       -> the node's own position as a GeoJSON Point, read from
+ *                     /etc/geolocation. Falls back to the literal "{{node}}"
+ *                     when the node has no usable location, so the token can
+ *                     still be resolved downstream rather than being lost.
  * WS_LOC_NONE       -> "\"{{none}}\""
  * WS_LOC_EXPLICIT   -> a GeoJSON Point, coordinates [lon, lat] or [lon, lat, alt]
  * WS_LOC_UNDECLARED -> NULL, so the caller leaves the field null

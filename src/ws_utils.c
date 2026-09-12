@@ -645,6 +645,125 @@ double ws_json_parse_double(const char *ptr, const char *end, const char *field,
 }
 
 /* ============================================================================
+ * Node Location
+ * ============================================================================ */
+
+/*
+ * Read the node's location from the GeoClue static location file.
+ */
+int ws_read_geolocation(ws_geolocation_t *out) {
+    const char *path;
+    char *buffer;
+    char *line;
+    char *saveptr = NULL;
+    double values[4];
+    int count = 0;
+
+    if (!out) return -1;
+    memset(out, 0, sizeof(*out));
+
+    path = getenv("WS_GEOLOCATION_FILE");
+    if (!path || !*path) path = WS_GEOLOCATION_FILE_DEFAULT;
+
+    buffer = ws_read_file(path, NULL);
+    if (!buffer) {
+        /* A node that has not been surveyed is a normal state, not a failure. */
+        return 0;
+    }
+
+    for (line = strtok_r(buffer, "\n", &saveptr);
+         line && count < 4;
+         line = strtok_r(NULL, "\n", &saveptr)) {
+        char *hash;
+        char *start;
+        char *end;
+        char *num_end;
+        double v;
+
+        /* Strip an inline comment, then surrounding whitespace and any CR. */
+        hash = strchr(line, '#');
+        if (hash) *hash = '\0';
+
+        start = line;
+        while (*start == ' ' || *start == '\t' || *start == '\r') start++;
+        end = start + strlen(start);
+        while (end > start &&
+               (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r')) end--;
+        *end = '\0';
+
+        if (*start == '\0') continue;  /* blank or comment-only */
+
+        v = strtod(start, &num_end);
+        if (num_end == start) {
+            ws_log_warning("Ignoring unparseable line in %s: \"%s\"", path, start);
+            continue;
+        }
+        values[count++] = v;
+    }
+
+    free(buffer);
+
+    /* Latitude and longitude together are the minimum useful location. */
+    if (count < 2) {
+        if (count > 0) {
+            ws_log_warning("%s has %d value(s); latitude and longitude are both "
+                           "required, ignoring node location", path, count);
+        }
+        return 0;
+    }
+
+    if (values[0] < -90.0 || values[0] > 90.0) {
+        ws_log_warning("Node latitude %f out of range [-90, 90] in %s; "
+                       "ignoring node location", values[0], path);
+        return 0;
+    }
+    if (values[1] < -180.0 || values[1] > 180.0) {
+        ws_log_warning("Node longitude %f out of range [-180, 180] in %s; "
+                       "ignoring node location", values[1], path);
+        return 0;
+    }
+    if (count >= 4 && values[3] < 0.0) {
+        ws_log_warning("Node location accuracy %f is negative in %s; "
+                       "ignoring node location", values[3], path);
+        return 0;
+    }
+
+    out->latitude  = values[0];
+    out->longitude = values[1];
+    if (count >= 3) {
+        out->altitude = values[2];
+        out->has_altitude = true;
+    }
+    if (count >= 4) {
+        out->accuracy = values[3];
+        out->has_accuracy = true;
+    }
+    out->valid = true;
+    return 0;
+}
+
+/*
+ * Render a node location as a GeoJSON Point.
+ */
+char *ws_geolocation_geojson(const ws_geolocation_t *g) {
+    char buf[256];
+
+    if (!g || !g->valid) return NULL;
+
+    /* GeoJSON is [longitude, latitude], in that order. */
+    if (g->has_altitude) {
+        snprintf(buf, sizeof(buf),
+                 "{\"type\":\"Point\",\"coordinates\":[%.6f,%.6f,%.2f]}",
+                 g->longitude, g->latitude, g->altitude);
+    } else {
+        snprintf(buf, sizeof(buf),
+                 "{\"type\":\"Point\",\"coordinates\":[%.6f,%.6f]}",
+                 g->longitude, g->latitude);
+    }
+    return strdup(buf);
+}
+
+/* ============================================================================
  * Sensor Location
  * ============================================================================ */
 
@@ -720,7 +839,14 @@ int ws_parse_sensor_location(const char *ptr, const char *end, ws_location_t *ou
         free(token);
     }
 
-    /* No "location" key at all leaves WS_LOC_UNDECLARED. */
+    /* No "location" key at all leaves WS_LOC_UNDECLARED. Logged so that a
+       sensor with no declared position is distinguishable from one whose
+       config was never reached - syslog only, because this fires on every
+       read cycle for every unconfigured sensor and would otherwise fill the
+       per-driver stderr log. */
+    if (out->source == WS_LOC_UNDECLARED && !token) {
+        ws_log_info("No location declared for this sensor; publishing none");
+    }
     return 0;
 }
 
@@ -733,8 +859,20 @@ char *ws_location_json(const ws_location_t *loc) {
     if (!loc) return NULL;
 
     switch (loc->source) {
-        case WS_LOC_NODE:
+        case WS_LOC_NODE: {
+            /* Resolved here rather than downstream, so a reading carries the
+               position it was actually taken at. A node that is moved and
+               re-surveyed does not retrospectively relocate its own history.
+               Falls back to the unresolved token when the node has no usable
+               location, which keeps the declaration rather than dropping it. */
+            ws_geolocation_t node;
+            char *json;
+
+            ws_read_geolocation(&node);
+            json = ws_geolocation_geojson(&node);
+            if (json) return json;
             return strdup("\"{{node}}\"");
+        }
 
         case WS_LOC_NONE:
             return strdup("\"{{none}}\"");
