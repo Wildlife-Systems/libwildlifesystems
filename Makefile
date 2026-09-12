@@ -33,9 +33,15 @@ LIBDIR = $(PREFIX)/lib
 INCLUDEDIR = $(PREFIX)/include/ws
 BINDIR = $(PREFIX)/bin
 
-.PHONY: all clean install tools
+.PHONY: all clean install tools test
 
 all: $(BUILDDIR) $(LIB) $(TOOLS)
+
+# The unit tests compile the library source themselves, with -DTEST_BUILD, so
+# this depends on nothing here; it exists so that "make test" at any level
+# runs them. It fails if they fail.
+test:
+	$(MAKE) -C tests test
 
 tools: $(BUILDDIR) $(TOOLS)
 
@@ -61,3 +67,4 @@ install: $(LIB) $(TOOLS)
 
 clean:
 	rm -rf $(BUILDDIR) $(LIB)
+	$(MAKE) -C tests clean

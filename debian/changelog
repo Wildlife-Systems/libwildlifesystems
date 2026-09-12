@@ -1,5 +1,8 @@
 libwildlifesystems (1.3.0) stable; urgency=medium
 
+  * Add a "make test" target that runs the unit tests, and have "make clean"
+    clean them. The tests had no entry point from the library's Makefile, so
+    nothing above it could run them
   * Every string placed in a reading by ws_build_sensor_json_base - sensor,
     device, measures, unit, sensor_id, sensor_name - is now escaped by the
     library. A sensor_id or sensor_name is typed into a config file, and a
