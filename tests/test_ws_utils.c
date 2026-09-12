@@ -791,6 +791,97 @@ void test_read_file_not_found(void) {
     TEST_ASSERT_NULL(content);
 }
 
+/* ========== Sensor config iterator Tests ========== */
+
+/* Writes a temporary config file and returns its path. */
+static const char *write_cfg(const char *body) {
+    static char path[] = "test_cfg_iter.json";
+    FILE *fp = fopen(path, "w");
+    if (!fp) return NULL;
+    fputs(body, fp);
+    fclose(fp);
+    return path;
+}
+
+void test_config_iter_missing_file_is_not_an_error(void) {
+    ws_config_iter_t it;
+    TEST_ASSERT_EQUAL_INT(0, ws_config_iter_open(&it, "/nonexistent/sensors.json"));
+    ws_config_iter_close(&it);
+}
+
+void test_config_iter_null_path_rejected(void) {
+    ws_config_iter_t it;
+    TEST_ASSERT_EQUAL_INT(-1, ws_config_iter_open(&it, NULL));
+    ws_config_iter_close(&it);
+}
+
+void test_config_iter_counts_and_yields_entries(void) {
+    ws_sensor_config_base_t base;
+    ws_config_iter_t it;
+    const char *start, *end;
+    const char *path = write_cfg(
+        "[{\"pin\":4,\"internal\":true,\"sensor_id\":\"A\",\"sensor_name\":\"One\"},"
+        " {\"pin\":17,\"sensor_id\":\"B\"}]");
+    TEST_ASSERT_NOT_NULL(path);
+
+    TEST_ASSERT_EQUAL_INT(2, ws_config_iter_open(&it, path));
+
+    TEST_ASSERT_TRUE(ws_config_iter_next(&it, &base, &start, &end));
+    TEST_ASSERT_TRUE(base.internal);
+    TEST_ASSERT_EQUAL_STRING("A", base.sensor_id);
+    TEST_ASSERT_EQUAL_STRING("One", base.sensor_name);
+    TEST_ASSERT_EQUAL_INT(4, ws_json_parse_int(start, end, "pin", 0));
+    ws_sensor_config_free_fields(&base);
+
+    /* Absent fields stay zeroed rather than carrying over from the last entry. */
+    TEST_ASSERT_TRUE(ws_config_iter_next(&it, &base, &start, &end));
+    TEST_ASSERT_FALSE(base.internal);
+    TEST_ASSERT_EQUAL_STRING("B", base.sensor_id);
+    TEST_ASSERT_NULL(base.sensor_name);
+    TEST_ASSERT_EQUAL_INT(17, ws_json_parse_int(start, end, "pin", 0));
+    ws_sensor_config_free_fields(&base);
+
+    TEST_ASSERT_FALSE(ws_config_iter_next(&it, &base, &start, &end));
+    ws_config_iter_close(&it);
+    remove(path);
+}
+
+/* A nested "location" object must not be mistaken for another entry, nor
+   truncate the entry that contains it. */
+void test_config_iter_handles_nested_location(void) {
+    ws_sensor_config_base_t base;
+    ws_config_iter_t it;
+    const char *start, *end;
+    const char *path = write_cfg(
+        "[{\"hw_id\":\"28-a\",\"location\":{\"latitude\":51.5,\"longitude\":-0.12},"
+        "\"sensor_name\":\"After the object\"}]");
+    TEST_ASSERT_NOT_NULL(path);
+
+    TEST_ASSERT_EQUAL_INT(1, ws_config_iter_open(&it, path));
+    TEST_ASSERT_TRUE(ws_config_iter_next(&it, &base, &start, &end));
+    TEST_ASSERT_EQUAL_INT(WS_LOC_EXPLICIT, base.location.source);
+    TEST_ASSERT_EQUAL_FLOAT(51.5, base.location.latitude, 0.0001);
+    /* A field after the nested object is still in range. */
+    TEST_ASSERT_EQUAL_STRING("After the object", base.sensor_name);
+    ws_sensor_config_free_fields(&base);
+
+    TEST_ASSERT_FALSE(ws_config_iter_next(&it, &base, &start, &end));
+    ws_config_iter_close(&it);
+    remove(path);
+}
+
+void test_config_iter_free_fields_nulls_pointers(void) {
+    ws_sensor_config_base_t base;
+    memset(&base, 0, sizeof(base));
+    base.sensor_id = strdup("A");
+    base.sensor_name = strdup("B");
+    ws_sensor_config_free_fields(&base);
+    TEST_ASSERT_NULL(base.sensor_id);
+    TEST_ASSERT_NULL(base.sensor_name);
+    /* Idempotent, so a double free_config cannot corrupt the heap. */
+    ws_sensor_config_free_fields(&base);
+}
+
 /* ========== Bounded string replacement Tests ========== */
 
 void test_replace_null_string_inserts_value(void) {
@@ -1202,6 +1293,13 @@ int main(void) {
     RUN_TEST(test_read_file_with_size);
     RUN_TEST(test_read_file_not_found);
     
+    /* Sensor config iterator tests */
+    RUN_TEST(test_config_iter_missing_file_is_not_an_error);
+    RUN_TEST(test_config_iter_null_path_rejected);
+    RUN_TEST(test_config_iter_counts_and_yields_entries);
+    RUN_TEST(test_config_iter_handles_nested_location);
+    RUN_TEST(test_config_iter_free_fields_nulls_pointers);
+
     /* Bounded string replacement tests */
     RUN_TEST(test_replace_null_string_inserts_value);
     RUN_TEST(test_replace_null_string_refuses_when_too_long);

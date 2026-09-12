@@ -37,24 +37,6 @@ typedef enum {
 #define WS_CONFIG_PATH(name) "/etc/ws/sensors/" name ".json"
 
 /*
- * Base sensor configuration structure.
- * Sensor-specific configs can embed or extend this.
- */
-typedef struct {
-    int internal;       /* 1 if internal sensor, 0 if external */
-    char *sensor_id;    /* Unique sensor identifier */
-    char *sensor_name;  /* Human-readable sensor name */
-} ws_sensor_config_base_t;
-
-/*
- * Free a base sensor config's string fields.
- * Does not free the struct itself.
- *
- * @param config    Pointer to config to free fields from
- */
-void ws_sensor_config_free_fields(ws_sensor_config_base_t *config);
-
-/*
  * Initialize syslog for a sensor program.
  * Should be called once at program startup.
  *
@@ -465,6 +447,104 @@ int ws_parse_sensor_location(const char *ptr, const char *end, ws_location_t *ou
  * @return      Allocated JSON value, or NULL for WS_LOC_UNDECLARED. Caller frees.
  */
 char *ws_location_json(const ws_location_t *loc);
+
+/* ============================================================================
+ * Sensor Configuration
+ * ============================================================================
+ * Every driver's /etc/ws/sensors/<driver>.json entry carries the same four
+ * fields; only the hardware-addressing field differs (a GPIO pin, an I2C
+ * address, a 1-Wire hardware id). Drivers embed this struct rather than
+ * redeclaring those fields, so a field added here reaches every driver at once.
+ */
+
+/*
+ * The fields common to every sensor's config entry.
+ *
+ * Embed as the first member of a driver's own config struct:
+ *
+ *     typedef struct {
+ *         ws_sensor_config_base_t base;
+ *         int pin;
+ *     } sensor_config_t;
+ */
+typedef struct {
+    bool internal;          /* true if an internal sensor */
+    char *sensor_id;        /* Unique sensor identifier, or NULL if unset */
+    char *sensor_name;      /* Human-readable name, or NULL if unset */
+    ws_location_t location; /* Where the sensor physically sits */
+} ws_sensor_config_base_t;
+
+/*
+ * Free a base sensor config's string fields and NULL them.
+ * Does not free the struct itself.
+ *
+ * @param config    Config whose fields should be freed
+ */
+void ws_sensor_config_free_fields(ws_sensor_config_base_t *config);
+
+/*
+ * Iterator over the sensor entries in a driver's config file.
+ *
+ * Replaces the read-count-allocate-walk sequence each driver used to carry:
+ *
+ *     ws_config_iter_t it;
+ *     int n = ws_config_iter_open(&it, CONFIG_PATH);
+ *     if (n <= 0) return NULL;
+ *     configs = calloc((size_t)n, sizeof(*configs));
+ *     ...
+ *     while (ws_config_iter_next(&it, &configs[i].base, &start, &end)) {
+ *         configs[i].pin = ws_json_parse_int(start, end, "pin", DEFAULT_PIN);
+ *         i++;
+ *     }
+ *     ws_config_iter_close(&it);
+ *
+ * Treat the fields as private.
+ */
+typedef struct {
+    char *buffer;       /* File contents; owned by the iterator */
+    const char *ptr;    /* Scan position within buffer */
+    int count;          /* Entries the file was found to hold */
+    int index;          /* Entries yielded so far */
+} ws_config_iter_t;
+
+/*
+ * Open a config file and count the entries it holds.
+ *
+ * A missing or empty file is not an error: it yields 0, and the driver falls
+ * back to its own defaults. Always pair with ws_config_iter_close().
+ *
+ * @param it    Iterator to initialise
+ * @param path  Config file path, e.g. WS_CONFIG_PATH("dht11")
+ * @return      Number of entries (0 if the file is absent, unreadable or holds
+ *              none), or -1 on bad arguments
+ */
+int ws_config_iter_open(ws_config_iter_t *it, const char *path);
+
+/*
+ * Fill `base` from the next entry and hand back that entry's bounds.
+ *
+ * The common fields are parsed for you; `start` and `end` bound the entry so
+ * the driver can read its own fields from it with ws_json_parse_*(). A field
+ * absent from the entry leaves the corresponding member zeroed (NULL for the
+ * strings, false for internal, WS_LOC_UNDECLARED for location) rather than
+ * guessing a default, so a driver can tell unset from set.
+ *
+ * @param it     Iterator from ws_config_iter_open()
+ * @param base   Populated from this entry; zeroed first
+ * @param start  Receives a pointer to the entry's opening brace
+ * @param end    Receives a pointer to its matching closing brace
+ * @return       true while entries remain, false once exhausted
+ */
+bool ws_config_iter_next(ws_config_iter_t *it, ws_sensor_config_base_t *base,
+                         const char **start, const char **end);
+
+/*
+ * Release the iterator's buffer. Safe to call on an iterator whose open
+ * returned 0 or -1, and safe to call twice.
+ *
+ * @param it    Iterator to close
+ */
+void ws_config_iter_close(ws_config_iter_t *it);
 
 /* ============================================================================
  * JSON Output Builder

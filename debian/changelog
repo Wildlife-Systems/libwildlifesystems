@@ -10,6 +10,16 @@ libwildlifesystems (1.3.0) stable; urgency=medium
     so moving and re-surveying a node does not retrospectively relocate its own
     history. Where the node has no usable location the token is emitted
     unresolved, keeping the declaration rather than discarding it
+  * ws_sensor_config_base_t gains the location field and is now what drivers
+    embed rather than redeclare. It had sat unused since 1.0 and had already
+    fallen behind: when location was added it went into three private structs
+    instead, and two of the six hand-rolled default-config blocks were missed,
+    leaving an uninitialised read that could emit fabricated coordinates. A
+    field added here now reaches every driver at once
+  * Add ws_config_iter_open/next/close, replacing the read-count-allocate-walk
+    sequence that each of the three drivers carried a line-for-line copy of.
+    The iterator parses the common fields and hands back each entry's bounds so
+    a driver parses only its own hardware-addressing field
   * Add ws_sensor_json_set_result, which sets either "value" or "error" and
     never both. sensor-w1therm was reporting the DS18B20 power-on sentinel
     (85.000) and the insufficient-power sentinel (127.937) in "value" next to

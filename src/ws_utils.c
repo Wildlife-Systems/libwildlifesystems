@@ -903,6 +903,74 @@ char *ws_location_json(const ws_location_t *loc) {
     }
 }
 
+/* ============================================================================
+ * Sensor Configuration
+ * ============================================================================ */
+
+int ws_config_iter_open(ws_config_iter_t *it, const char *path) {
+    if (!it) return -1;
+
+    it->buffer = NULL;
+    it->ptr = NULL;
+    it->count = 0;
+    it->index = 0;
+
+    if (!path) return -1;
+
+    /* A driver with no config file is the normal single-sensor case, not an
+       error: the caller falls back to its own defaults. */
+    it->buffer = ws_read_file(path, NULL);
+    if (!it->buffer) return 0;
+
+    it->count = ws_json_count_objects(it->buffer);
+    if (it->count <= 0) {
+        it->count = 0;
+        return 0;
+    }
+
+    it->ptr = it->buffer;
+    return it->count;
+}
+
+bool ws_config_iter_next(ws_config_iter_t *it, ws_sensor_config_base_t *base,
+                         const char **start, const char **end) {
+    const char *obj_start;
+    const char *obj_end;
+
+    if (!it || !base || !start || !end) return false;
+    if (!it->ptr || it->index >= it->count) return false;
+
+    obj_start = strchr(it->ptr, '{');
+    if (!obj_start) return false;
+
+    /* Brace-matched, so an entry containing a nested object - a "location"
+       with coordinates, say - is bounded correctly. */
+    obj_end = ws_json_object_end(obj_start);
+    if (!obj_end) return false;
+
+    memset(base, 0, sizeof(*base));
+    base->internal    = ws_json_parse_bool(obj_start, obj_end, "internal", false);
+    base->sensor_id   = ws_json_parse_string(obj_start, obj_end, "sensor_id");
+    base->sensor_name = ws_json_parse_string(obj_start, obj_end, "sensor_name");
+    ws_parse_sensor_location(obj_start, obj_end, &base->location);
+
+    *start = obj_start;
+    *end = obj_end;
+
+    it->ptr = obj_end + 1;
+    it->index++;
+    return true;
+}
+
+void ws_config_iter_close(ws_config_iter_t *it) {
+    if (!it) return;
+    free(it->buffer);
+    it->buffer = NULL;
+    it->ptr = NULL;
+    it->count = 0;
+    it->index = 0;
+}
+
 /*
  * Get serial number with suffix appended.
  */
