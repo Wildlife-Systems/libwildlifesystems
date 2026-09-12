@@ -16,7 +16,9 @@
  *
  * Common options apply to every reading:
  *   --device NAME     physical device model, e.g. raspberry_pi
- *   --prefix ID       sensor_id prefix; each id becomes PREFIX_<sensor>
+ *   --prefix ID       sensor_id prefix; each id becomes PREFIX_<sensor>.
+ *                     Without it (and without --id) sensor_id is null: an
+ *                     unknown id is recorded as unknown, not fabricated
  *   --name NAME       sensor_name for every reading
  *   --internal        mark every reading as internal
  *
@@ -28,6 +30,8 @@
  *   --precision N     decimal places, default 3
  *   --location TOKEN  {{node}} or {{none}}; omit for an undeclared location
  *   --id ID           explicit sensor_id, overriding --prefix
+ *   --device NAME     this reading's device, overriding the common one;
+ *                     an empty NAME means it has none
  *   --error MSG       report a failed reading; value is left null
  *
  * Prints one JSON array of all the readings. Exits WS_EXIT_SUCCESS, or
@@ -58,10 +62,12 @@ typedef struct {
     const char *unit;       /* canonical spelling, from ws_unit_canonical() */
     ws_location_t location; /* parsed during argument handling */
     const char *id;         /* explicit sensor_id, or NULL to use the prefix */
+    const char *device;     /* per-reading device, valid when has_device */
     const char *error;      /* NULL when the reading succeeded */
     double value;
     int precision;
     bool has_value;
+    bool has_device;        /* --device given for this reading, even if "" */
 } reading_t;
 
 static void usage(void) {
@@ -69,7 +75,7 @@ static void usage(void) {
         "Usage: ws-emit [--device NAME] [--prefix ID] [--name NAME] [--internal]\n"
         "               -- --sensor NAME --measures NAME --unit NAME\n"
         "                  (--value NUM [--precision N] | --error MSG)\n"
-        "                  [--location TOKEN] [--id ID]\n"
+        "                  [--location TOKEN] [--id ID] [--device NAME]\n"
         "               [-- ...]\n");
 }
 
@@ -100,20 +106,34 @@ static int parse_location(const char *token, ws_location_t *out) {
     return -1;
 }
 
-/* Build <prefix>_<sensor> unless an explicit id was given. Caller frees. */
-static char *resolve_id(const reading_t *r, const char *prefix) {
+/*
+ * The reading's sensor_id: --id if given, else <prefix>_<sensor>, else none.
+ *
+ * None is deliberate. With neither a prefix nor an explicit id there is
+ * nothing to identify the sensor by, and the C drivers' rule applies: an
+ * unknown id is recorded as null, not fabricated. The bare sensor name used
+ * to be emitted instead, which is the same string on every node and so
+ * collides across them.
+ *
+ * @param out  Receives an allocated id, or NULL for none. Caller frees.
+ * @return     0, or -1 if out of memory
+ */
+static int resolve_id(const reading_t *r, const char *prefix, char **out) {
     size_t len;
-    char *out;
 
-    if (r->id) return strdup(r->id);
-    if (!prefix || !*prefix) return strdup(r->sensor);
+    *out = NULL;
+    if (r->id) {
+        *out = strdup(r->id);
+        return *out ? 0 : -1;
+    }
+    if (!prefix || !*prefix) return 0;
 
     len = strlen(prefix) + strlen(r->sensor) + 2;
-    out = malloc(len);
-    if (!out) return NULL;
+    *out = malloc(len);
+    if (!*out) return -1;
 
-    snprintf(out, len, "%s_%s", prefix, r->sensor);
-    return out;
+    snprintf(*out, len, "%s_%s", prefix, r->sensor);
+    return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -214,6 +234,13 @@ int main(int argc, char *argv[]) {
                 }
             } else if (strcmp(argv[i], "--id") == 0) {
                 r->id = argv[++i];
+            } else if (strcmp(argv[i], "--device") == 0) {
+                /* Overrides the common --device for this reading alone. An
+                   empty name means the reading has no device: a pseudo-sensor
+                   such as storage_used measures nothing physical, and must
+                   not be tagged with the Pi it happens to run on. */
+                r->device = argv[++i];
+                r->has_device = true;
             } else if (strcmp(argv[i], "--error") == 0) {
                 r->error = argv[++i];
             } else {
@@ -255,13 +282,13 @@ int main(int argc, char *argv[]) {
         char json[READING_JSON_SIZE];
         char *sensor_id;
 
-        sensor_id = resolve_id(r, prefix);
-        if (!sensor_id) {
+        if (resolve_id(r, prefix, &sensor_id) != 0) {
             ws_log_error("Out of memory building sensor_id");
             return WS_EXIT_INVALID_ARG;
         }
 
-        if (ws_build_sensor_json_base(json, sizeof(json), r->sensor, device,
+        if (ws_build_sensor_json_base(json, sizeof(json), r->sensor,
+                                      r->has_device ? r->device : device,
                                       r->measures, r->unit, sensor_id, name,
                                       internal, &r->location, now) != 0) {
             ws_log_error("sc-prototype failed - cannot generate JSON");

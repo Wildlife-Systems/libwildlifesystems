@@ -36,13 +36,20 @@ Physical device model, for example
 .IR raspberry_pi .
 Identifies the sensor hardware, as distinct from
 .BR \-\-sensor .
+A reading may override it with its own
+.BR \-\-device .
 .TP
 .BI \-\-prefix " ID"
 Prefix for each reading's
 .IR sensor_id ,
 which becomes
 .IR PREFIX_<sensor> .
-Typically the node serial number.
+Typically the node serial number. Without it, a reading that has no
+.B \-\-id
+of its own is emitted with
+.I sensor_id
+null: an unknown identifier is recorded as unknown rather than fabricated
+from the bare sensor name, which would be the same on every node.
 .TP
 .BI \-\-name " NAME"
 Human-readable
@@ -101,6 +108,15 @@ Explicit
 overriding
 .BR \-\-prefix .
 .TP
+.BI \-\-device " NAME"
+This reading's device, overriding the common
+.BR \-\-device .
+An empty
+.I NAME
+means the reading has none, which is right for a pseudo-sensor such as
+.I storage_used
+that measures nothing physical.
+.TP
 .BI \-\-error " MSG"
 Report a failed reading:
 .I error
@@ -125,7 +141,7 @@ ws-emit --device raspberry_pi --internal --prefix "$SERIAL" \\
   -- --sensor onboard_cpu --measures temperature --unit celsius \\
      --value 47 --precision 0 --location '{{node}}' \\
   -- --sensor memory_used --measures memory --unit percentage \\
-     --value 31 --precision 0 --location '{{none}}'
+     --value 31 --precision 0 --location '{{none}}' --device ''
 .RE
 .fi
 .PP
