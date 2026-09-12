@@ -128,28 +128,31 @@ void ws_json_replace_null_string(char *json, size_t json_capacity,
                                  const char *key, const char *value);
 
 /*
- * Replace a JSON null value with a number value.
- *
- * Takes no capacity: the inserted text is a formatted scalar of bounded
- * length, unlike the string and raw variants, which insert caller-supplied
- * text and so require the buffer size.
+ * Replace a JSON null value with a number value, to three decimal places.
  * e.g. "value":null -> "value":23.456
  *
- * @param json     JSON string to modify (in-place)
- * @param key      Field name to search for
- * @param value    Numeric value to insert
+ * Every replacer takes the buffer capacity and refuses, leaving the buffer
+ * untouched, rather than overrun or clip it.
+ *
+ * @param json          JSON string to modify (in-place)
+ * @param json_capacity Size of the buffer
+ * @param key           Field name to search for
+ * @param value         Numeric value to insert
  */
-void ws_json_replace_null_number(char *json, const char *key, double value);
+void ws_json_replace_null_number(char *json, size_t json_capacity,
+                                 const char *key, double value);
 
 /*
  * Replace a JSON null value with an integer value.
  * e.g. "timestamp":null -> "timestamp":1234567890
  *
- * @param json     JSON string to modify (in-place)
- * @param key      Field name to search for
- * @param value    Integer value to insert
+ * @param json          JSON string to modify (in-place)
+ * @param json_capacity Size of the buffer
+ * @param key           Field name to search for
+ * @param value         Integer value to insert
  */
-void ws_json_replace_null_int(char *json, const char *key, long value);
+void ws_json_replace_null_int(char *json, size_t json_capacity,
+                              const char *key, long value);
 
 /*
  * Replace a JSON null value with a boolean value.
@@ -158,11 +161,13 @@ void ws_json_replace_null_int(char *json, const char *key, long value);
  * An existing boolean literal is also replaced, so a template that ships
  * "internal":false (as sc-prototype does) is updated rather than left alone.
  *
- * @param json     JSON string to modify (in-place)
- * @param key      Field name to search for
- * @param value    Boolean value to insert
+ * @param json          JSON string to modify (in-place)
+ * @param json_capacity Size of the buffer
+ * @param key           Field name to search for
+ * @param value         Boolean value to insert
  */
-void ws_json_replace_null_bool(char *json, const char *key, bool value);
+void ws_json_replace_null_bool(char *json, size_t json_capacity,
+                               const char *key, bool value);
 
 /*
  * Replace "key":null with "key":<raw_json>, inserting the value verbatim.
@@ -212,25 +217,10 @@ const char *ws_get_prototype_cached(void);
 int ws_require_prototype(void);
 
 /*
- * Get current Unix timestamp.
- *
- * @return         Current time as Unix timestamp
- */
-time_t ws_get_timestamp(void);
-
-/*
  * Handle the 'identify' command.
  * Exits with WS_EXIT_IDENTIFY code.
  */
 void ws_cmd_identify(void);
-
-/*
- * Handle the 'list' command for sensors with single measurement type.
- * Prints the measurement type and exits.
- *
- * @param measurement  The measurement type to print (e.g., "temperature")
- */
-void ws_cmd_list_single(const char *measurement);
 
 /*
  * Handle the 'list' command for sensors with multiple measurement types.
@@ -276,6 +266,20 @@ int ws_cmd_unknown_arg(const char *program, const char *arg,
  * @return              true if arg names a measurement
  */
 bool ws_arg_is_measurement(const char *arg, const char **measurements);
+
+/*
+ * Does a sensor pass the internal/external filter?
+ *
+ * WS_LOCATION_ALL passes everything; WS_LOCATION_INTERNAL passes internal
+ * sensors and WS_LOCATION_EXTERNAL the rest. A sensor with no config entry
+ * is external, so a caller passes false for it. Each driver used to write
+ * this test its own way.
+ *
+ * @param filter    The filter the driver was invoked with
+ * @param internal  Whether the sensor is marked internal
+ * @return          true if the sensor should be reported
+ */
+bool ws_location_filter_matches(ws_location_filter_t filter, bool internal);
 
 /*
  * One reading of a driver's "mock" output.
@@ -471,6 +475,19 @@ double ws_json_parse_double(const char *ptr, const char *end, const char *field,
  * @return          Allocated string, or NULL on error. Caller must free.
  */
 char *ws_get_serial_with_suffix(const char *suffix);
+
+/*
+ * Build "<sensor_id>_<measurement>", the sensor_id of one measurement of a
+ * sensor that reports several. NULL in, NULL out: an unknown id stays
+ * unknown rather than becoming "_temperature", which would look like a real
+ * one. Two drivers used to carry a copy of this.
+ *
+ * @param sensor_id     The sensor's id, or NULL if unknown
+ * @param measurement   Suffix, e.g. "temperature"
+ * @return              Allocated id, or NULL if unknown or out of memory.
+ *                      Caller frees.
+ */
+char *ws_measurement_id(const char *sensor_id, const char *measurement);
 
 /* ============================================================================
  * Node Location
@@ -901,6 +918,17 @@ void ws_json_builder_add_bool(ws_json_builder_t *builder, const char *key, bool 
 void ws_json_builder_add_null(ws_json_builder_t *builder, const char *key);
 
 /*
+ * Add a field whose value is already JSON: a nested object or array, given
+ * verbatim. This is how a driver nests its calibration object inside its
+ * config object.
+ *
+ * @param builder   Builder context
+ * @param key       Field name
+ * @param raw_json  A complete JSON value, inserted as is
+ */
+void ws_json_builder_add_raw(ws_json_builder_t *builder, const char *key, const char *raw_json);
+
+/*
  * Get the final JSON string.
  * Returns NULL if there was an error during building.
  *
@@ -986,15 +1014,6 @@ void ws_json_array_free(ws_json_array_builder_t *builder);
  */
 
 /*
- * Format a Unix timestamp as a string.
- *
- * @param buffer    Output buffer
- * @param bufsize   Size of output buffer
- * @param timestamp Unix timestamp
- */
-void ws_format_timestamp(char *buffer, size_t bufsize, time_t timestamp);
-
-/*
  * Build base sensor JSON from sc-prototype template.
  * Populates common fields: sensor, device, measures, unit, sensor_id,
  * sensor_name, location, internal, timestamp.
@@ -1035,11 +1054,13 @@ int ws_build_sensor_json_base(char *output, size_t output_len,
  * Add value field to sensor JSON.
  * Use after ws_build_sensor_json_base().
  *
- * @param json      JSON buffer to modify
- * @param value     Numeric value
- * @param precision Decimal places (e.g., 1 for "23.5")
+ * @param json          JSON buffer to modify
+ * @param json_capacity Size of the buffer
+ * @param value         Numeric value
+ * @param precision     Decimal places (e.g., 1 for "23.5")
  */
-void ws_sensor_json_set_value(char *json, double value, int precision);
+void ws_sensor_json_set_value(char *json, size_t json_capacity,
+                              double value, int precision);
 
 /*
  * Add error field to sensor JSON and set value to null.
@@ -1093,59 +1114,5 @@ void ws_sensor_json_set_result(char *json, size_t json_capacity, double value,
  * @param config_json   JSON object string to insert (without surrounding quotes)
  */
 void ws_sensor_json_set_config(char *json, size_t json_capacity, const char *config_json);
-
-/*
- * Build a config JSON object with common fields.
- * Returns the built string in the provided buffer.
- * Additional fields can be appended before the closing '}'.
- *
- * @param buffer        Output buffer for config JSON
- * @param bufsize       Size of output buffer
- * @param version       Software version string
- * @return              Number of characters written (excluding null terminator)
- */
-int ws_build_config_base(char *buffer, size_t bufsize, const char *version);
-
-/*
- * Append a string field to a config JSON object.
- * Call after ws_build_config_base() and before ws_config_end().
- *
- * @param buffer    Config buffer to append to
- * @param bufsize   Size of buffer
- * @param key       Field name
- * @param value     String value
- * @return          Number of characters appended
- */
-int ws_config_add_string(char *buffer, size_t bufsize, const char *key, const char *value);
-
-/*
- * Append an integer field to a config JSON object.
- *
- * @param buffer    Config buffer to append to
- * @param bufsize   Size of buffer
- * @param key       Field name
- * @param value     Integer value
- * @return          Number of characters appended
- */
-int ws_config_add_int(char *buffer, size_t bufsize, const char *key, long value);
-
-/*
- * Append a nested JSON object to a config JSON object.
- * Use for calibration data or other nested structures.
- *
- * @param buffer      Config buffer to append to
- * @param bufsize     Size of buffer
- * @param key         Field name
- * @param object_json JSON object string (e.g., "{\"par_t1\":123}")
- * @return            Number of characters appended
- */
-int ws_config_add_object(char *buffer, size_t bufsize, const char *key, const char *object_json);
-
-/*
- * Close a config JSON object (replaces trailing ',' with '}' if needed).
- *
- * @param buffer    Config buffer to close
- */
-void ws_config_end(char *buffer);
 
 #endif /* WS_UTILS_H */

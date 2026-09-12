@@ -1737,38 +1737,38 @@ void test_set_result_null_json_is_noop(void) {
 
 void test_replace_null_bool_from_null(void) {
     char json[256] = "{\"internal\":null,\"error\":null}";
-    ws_json_replace_null_bool(json, "internal", true);
+    ws_json_replace_null_bool(json, sizeof(json), "internal", true);
     TEST_ASSERT_EQUAL_STRING("{\"internal\":true,\"error\":null}", json);
 }
 
 void test_replace_null_bool_over_prototype_false(void) {
     char json[256] = PROTO_INTERNAL_FALSE;
-    ws_json_replace_null_bool(json, "internal", true);
+    ws_json_replace_null_bool(json, sizeof(json), "internal", true);
     TEST_ASSERT_EQUAL_STRING("{\"sensor\":null,\"internal\":true,\"error\":null}", json);
 }
 
 void test_replace_null_bool_false_stays_false(void) {
     char json[256] = PROTO_INTERNAL_FALSE;
-    ws_json_replace_null_bool(json, "internal", false);
+    ws_json_replace_null_bool(json, sizeof(json), "internal", false);
     TEST_ASSERT_EQUAL_STRING(PROTO_INTERNAL_FALSE, json);
 }
 
 void test_replace_null_bool_over_existing_true(void) {
     char json[256] = "{\"internal\":true}";
-    ws_json_replace_null_bool(json, "internal", false);
+    ws_json_replace_null_bool(json, sizeof(json), "internal", false);
     TEST_ASSERT_EQUAL_STRING("{\"internal\":false}", json);
 }
 
 void test_replace_null_bool_absent_key_is_noop(void) {
     char json[256] = PROTO_INTERNAL_FALSE;
-    ws_json_replace_null_bool(json, "missing", true);
+    ws_json_replace_null_bool(json, sizeof(json), "missing", true);
     TEST_ASSERT_EQUAL_STRING(PROTO_INTERNAL_FALSE, json);
 }
 
 /* "internal" must not be matched by a key that merely shares a prefix. */
 void test_replace_null_bool_no_prefix_collision(void) {
     char json[256] = "{\"internal_only\":false,\"internal\":false}";
-    ws_json_replace_null_bool(json, "internal", true);
+    ws_json_replace_null_bool(json, sizeof(json), "internal", true);
     TEST_ASSERT_EQUAL_STRING("{\"internal_only\":false,\"internal\":true}", json);
 }
 
@@ -1834,6 +1834,35 @@ void test_json_builder_escapes_strings(void) {
     ws_json_builder_add_string(&builder, "msg", "say \"hi\"");
     ws_json_builder_end(&builder);
     TEST_ASSERT_EQUAL_STRING("{\"msg\":\"say \\\"hi\\\"\"}", ws_json_builder_get(&builder));
+}
+
+/* A nested value goes in as it is. This is the shape of sensor-bme680's
+   config object, which used to be built by a separate appender API that did
+   not escape; the builder replaces it byte for byte. */
+void test_json_builder_add_raw_nests_an_object(void) {
+    char buffer[256];
+    ws_json_builder_t builder;
+    ws_json_builder_init(&builder, buffer, sizeof(buffer));
+    ws_json_builder_start(&builder);
+    ws_json_builder_add_string(&builder, "software_version", "2.3.0");
+    ws_json_builder_add_string(&builder, "i2c_addr", "0x76");
+    ws_json_builder_add_raw(&builder, "calibration", "{\"par_t1\":123,\"t_fine\":4}");
+    ws_json_builder_end(&builder);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"software_version\":\"2.3.0\",\"i2c_addr\":\"0x76\","
+        "\"calibration\":{\"par_t1\":123,\"t_fine\":4}}",
+        ws_json_builder_get(&builder));
+}
+
+/* Overflow is reported, never clipped: get() yields NULL. */
+void test_json_builder_overflow_is_an_error(void) {
+    char buffer[24];
+    ws_json_builder_t builder;
+    ws_json_builder_init(&builder, buffer, sizeof(buffer));
+    ws_json_builder_start(&builder);
+    ws_json_builder_add_string(&builder, "k", "a value that will not fit");
+    ws_json_builder_end(&builder);
+    TEST_ASSERT_NULL(ws_json_builder_get(&builder));
 }
 
 /* ========== GPIO Validation Tests ========== */
@@ -1941,49 +1970,64 @@ void test_json_array_empty_item_fails_the_array(void) {
     ws_json_array_free(&builder);
 }
 
-/* ========== Config Builder Tests ========== */
+/* ========== Parser whitespace Tests ========== */
 
-void test_config_base_with_version(void) {
-    char buffer[256];
-    ws_build_config_base(buffer, sizeof(buffer), "1.2.3");
-    ws_config_end(buffer);
-    TEST_ASSERT_EQUAL_STRING("{\"software_version\":\"1.2.3\"}", buffer);
+/* The five parsers share one field finder now, so they agree on what
+   whitespace is. Three of them used to skip only spaces and tabs, and a
+   value on the line after its key parsed as a string but not as a bool. */
+void test_parse_bool_value_on_next_line(void) {
+    const char *json = "{\"internal\":\n    true\n}";
+    TEST_ASSERT_TRUE(ws_json_parse_bool(json, json + strlen(json), "internal", false));
 }
 
-void test_config_add_string(void) {
-    char buffer[256];
-    ws_build_config_base(buffer, sizeof(buffer), "1.0");
-    ws_config_add_string(buffer, sizeof(buffer), "i2c_addr", "0x76");
-    ws_config_end(buffer);
-    TEST_ASSERT_EQUAL_STRING("{\"software_version\":\"1.0\",\"i2c_addr\":\"0x76\"}", buffer);
+void test_parse_int_value_on_next_line(void) {
+    const char *json = "{\"pin\":\r\n  17}";
+    TEST_ASSERT_EQUAL_INT(17, ws_json_parse_int(json, json + strlen(json), "pin", 4));
 }
 
-void test_config_add_int(void) {
-    char buffer[256];
-    ws_build_config_base(buffer, sizeof(buffer), "1.0");
-    ws_config_add_int(buffer, sizeof(buffer), "pin", 17);
-    ws_config_end(buffer);
-    TEST_ASSERT_EQUAL_STRING("{\"software_version\":\"1.0\",\"pin\":17}", buffer);
+void test_parse_double_value_on_next_line(void) {
+    const char *json = "{\"latitude\":\n 51.5}";
+    double v = ws_json_parse_double(json, json + strlen(json), "latitude", 0.0);
+    TEST_ASSERT_TRUE(fabs(v - 51.5) < 1e-9);
 }
 
-void test_config_add_object(void) {
-    char buffer[256];
-    ws_build_config_base(buffer, sizeof(buffer), "1.0");
-    ws_config_add_object(buffer, sizeof(buffer), "calibration", "{\"par_t1\":123}");
-    ws_config_end(buffer);
-    TEST_ASSERT_EQUAL_STRING("{\"software_version\":\"1.0\",\"calibration\":{\"par_t1\":123}}", buffer);
+/* ========== Scalar replacer capacity Tests ========== */
+
+/* The scalar replacers took no capacity and so could not refuse; they now
+   do, like the string and raw ones. */
+void test_replace_null_int_refuses_when_too_long(void) {
+    char json[16] = "{\"t\":null}";
+    ws_json_replace_null_int(json, sizeof(json), "t", 123456789012L);
+    TEST_ASSERT_EQUAL_STRING("{\"t\":null}", json);
 }
 
-void test_config_multiple_fields(void) {
-    char buffer[512];
-    ws_build_config_base(buffer, sizeof(buffer), "2.0");
-    ws_config_add_string(buffer, sizeof(buffer), "device", "/dev/i2c-1");
-    ws_config_add_int(buffer, sizeof(buffer), "address", 118);
-    ws_config_add_object(buffer, sizeof(buffer), "calib", "{\"t\":25}");
-    ws_config_end(buffer);
-    TEST_ASSERT_EQUAL_STRING(
-        "{\"software_version\":\"2.0\",\"device\":\"/dev/i2c-1\",\"address\":118,\"calib\":{\"t\":25}}", 
-        buffer);
+void test_replace_null_number_default_precision(void) {
+    char json[32] = "{\"v\":null}";
+    ws_json_replace_null_number(json, sizeof(json), "v", 2.5);
+    TEST_ASSERT_EQUAL_STRING("{\"v\":2.500}", json);
+}
+
+/* ========== Measurement id and filter Tests ========== */
+
+void test_measurement_id_joins(void) {
+    char *id = ws_measurement_id("abc_dht11", "temperature");
+    TEST_ASSERT_EQUAL_STRING("abc_dht11_temperature", id);
+    free(id);
+}
+
+/* An unknown id stays unknown: never "_temperature". */
+void test_measurement_id_null_stays_null(void) {
+    TEST_ASSERT_NULL(ws_measurement_id(NULL, "temperature"));
+    TEST_ASSERT_NULL(ws_measurement_id("abc", NULL));
+}
+
+void test_location_filter_matches(void) {
+    TEST_ASSERT_TRUE(ws_location_filter_matches(WS_LOCATION_ALL, true));
+    TEST_ASSERT_TRUE(ws_location_filter_matches(WS_LOCATION_ALL, false));
+    TEST_ASSERT_TRUE(ws_location_filter_matches(WS_LOCATION_INTERNAL, true));
+    TEST_ASSERT_FALSE(ws_location_filter_matches(WS_LOCATION_INTERNAL, false));
+    TEST_ASSERT_FALSE(ws_location_filter_matches(WS_LOCATION_EXTERNAL, true));
+    TEST_ASSERT_TRUE(ws_location_filter_matches(WS_LOCATION_EXTERNAL, false));
 }
 
 /* ========== Main ========== */
@@ -2204,6 +2248,8 @@ int main(void) {
     RUN_TEST(test_json_builder_null_value);
     RUN_TEST(test_json_builder_double_precision);
     RUN_TEST(test_json_builder_escapes_strings);
+    RUN_TEST(test_json_builder_add_raw_nests_an_object);
+    RUN_TEST(test_json_builder_overflow_is_an_error);
     
     /* GPIO validation tests */
     RUN_TEST(test_validate_gpio_pin_valid);
@@ -2217,12 +2263,15 @@ int main(void) {
     RUN_TEST(test_json_array_free_is_idempotent);
     RUN_TEST(test_json_array_empty_item_fails_the_array);
 
-    /* Config Builder tests */
-    RUN_TEST(test_config_base_with_version);
-    RUN_TEST(test_config_add_string);
-    RUN_TEST(test_config_add_int);
-    RUN_TEST(test_config_add_object);
-    RUN_TEST(test_config_multiple_fields);
+    /* Parser whitespace, scalar capacity, and the two driver helpers */
+    RUN_TEST(test_parse_bool_value_on_next_line);
+    RUN_TEST(test_parse_int_value_on_next_line);
+    RUN_TEST(test_parse_double_value_on_next_line);
+    RUN_TEST(test_replace_null_int_refuses_when_too_long);
+    RUN_TEST(test_replace_null_number_default_precision);
+    RUN_TEST(test_measurement_id_joins);
+    RUN_TEST(test_measurement_id_null_stays_null);
+    RUN_TEST(test_location_filter_matches);
 
     remove_fake_prototype();
     return UNITY_END();

@@ -55,47 +55,38 @@ void ws_log_init(const char *program_name) {
 }
 
 /*
- * Log an error to both stderr and syslog.
+ * The one path every message takes: formatted once, then to stderr under a
+ * prefix, unless prefix is NULL for a message that is syslog-only, and to
+ * syslog at the given priority.
  */
+static void log_at(int priority, const char *prefix, const char *fmt, va_list args) {
+    char buf[512];
+
+    vsnprintf(buf, sizeof(buf), fmt, args);
+
+    if (prefix) fprintf(stderr, "%s: %s\n", prefix, buf);
+    syslog(priority, "%s", buf);
+}
+
 void ws_log_error(const char *fmt, ...) {
     va_list args;
-    char buf[512];
-    
     va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
+    log_at(LOG_ERR, "Error", fmt, args);
     va_end(args);
-    
-    fprintf(stderr, "Error: %s\n", buf);
-    syslog(LOG_ERR, "%s", buf);
 }
 
-/*
- * Log a warning to both stderr and syslog.
- */
 void ws_log_warning(const char *fmt, ...) {
     va_list args;
-    char buf[512];
-    
     va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
+    log_at(LOG_WARNING, "Warning", fmt, args);
     va_end(args);
-    
-    fprintf(stderr, "Warning: %s\n", buf);
-    syslog(LOG_WARNING, "%s", buf);
 }
 
-/*
- * Log an info message to syslog only.
- */
 void ws_log_info(const char *fmt, ...) {
     va_list args;
-    char buf[512];
-    
     va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
+    log_at(LOG_INFO, NULL, fmt, args);
     va_end(args);
-    
-    syslog(LOG_INFO, "%s", buf);
 }
 
 /* ============================================================================
@@ -134,129 +125,115 @@ void ws_json_escape_string(const char *src, char *dst, size_t dst_len) {
 }
 
 /*
- * Replace a JSON null value with a string value.
+ * Replace the value of "key" in place, where its current value is one of the
+ * given literals: the "<key>": part stays, the literal is spliced out and
+ * `text` spliced in, with the tail shifted to fit.
+ *
+ * Refuses, leaving the buffer untouched, if the result would not fit in
+ * capacity. A clipped value would leave the JSON unterminated and invalidate
+ * the whole document, not merely this field. Every public replacer is a
+ * formatter in front of this one splice; there used to be six copies of it.
+ *
+ * @param literals  NULL-terminated list of current values to match, tried in
+ *                  order; usually just "null"
+ * @return          0 if replaced, -1 if the key was not found with any of the
+ *                  literals or the result would not fit
  */
-void ws_json_replace_null_string(char *json, size_t json_capacity,
-                                 const char *key, const char *value) {
+static int splice_value(char *json, size_t capacity, const char *key,
+                        const char *const *literals, const char *text) {
     char search[128];
-    char *pos;
-    size_t search_len, prefix_len, value_len, tail_len, new_total;
-
-    if (!json || !key || !value) return;
-
-    snprintf(search, sizeof(search), "\"%s\":null", key);
-    pos = strstr(json, search);
-    if (pos == NULL) {
-        return;
-    }
-
-    search_len = strlen(search);
-    /* The "<key>": part stays put; only null is replaced, by "<value>". */
-    prefix_len = search_len - 4;
-    value_len = strlen(value);
-    tail_len = strlen(pos + search_len);
-
-    /* prefix + opening quote + value + closing quote + tail + terminator.
-       Refuse rather than truncate: a clipped value would leave the string
-       unterminated and so invalidate the whole document, not just this key. */
-    new_total = (size_t)(pos - json) + prefix_len + 1 + value_len + 1 + tail_len + 1;
-    if (new_total > json_capacity) return;
-
-    /* Shift the tail clear, then write the quoted value over the null. */
-    memmove(pos + prefix_len + 1 + value_len + 1, pos + search_len, tail_len + 1);
-    pos[prefix_len] = '"';
-    memcpy(pos + prefix_len + 1, value, value_len);
-    pos[prefix_len + 1 + value_len] = '"';
-}
-
-/*
- * Replace a JSON null value with a number value.
- */
-void ws_json_replace_null_number(char *json, const char *key, double value) {
-    char search[128];
-    char replace[256];
-    char *pos;
-    size_t search_len, replace_len, tail_len;
-    
-    if (!json || !key) return;
-    
-    snprintf(search, sizeof(search), "\"%s\":null", key);
-    snprintf(replace, sizeof(replace), "\"%s\":%.3f", key, value);
-    
-    pos = strstr(json, search);
-    if (pos == NULL) {
-        return;
-    }
-    
-    search_len = strlen(search);
-    replace_len = strlen(replace);
-    tail_len = strlen(pos + search_len);
-    
-    memmove(pos + replace_len, pos + search_len, tail_len + 1);
-    memcpy(pos, replace, replace_len);
-}
-
-/*
- * Replace a JSON null value with an integer value.
- */
-void ws_json_replace_null_int(char *json, const char *key, long value) {
-    char search[128];
-    char replace[256];
-    char *pos;
-    size_t search_len, replace_len, tail_len;
-    
-    if (!json || !key) return;
-    
-    snprintf(search, sizeof(search), "\"%s\":null", key);
-    snprintf(replace, sizeof(replace), "\"%s\":%ld", key, value);
-    
-    pos = strstr(json, search);
-    if (pos == NULL) {
-        return;
-    }
-    
-    search_len = strlen(search);
-    replace_len = strlen(replace);
-    tail_len = strlen(pos + search_len);
-    
-    memmove(pos + replace_len, pos + search_len, tail_len + 1);
-    memcpy(pos, replace, replace_len);
-}
-
-/*
- * Replace a JSON null value with a boolean value.
- */
-void ws_json_replace_null_bool(char *json, const char *key, bool value) {
-    /* sc-prototype ships "internal":false rather than null, so an existing
-       boolean literal has to be accepted as well as null -- otherwise the
-       field silently keeps the template's value. */
-    static const char *const literals[] = { "null", "false", "true" };
-    char search[128];
-    char replace[256];
     char *pos = NULL;
-    size_t search_len = 0, replace_len, tail_len;
-    size_t i;
+    size_t search_len = 0, prefix_len, text_len, tail_len, new_total;
 
-    if (!json || !key) return;
+    if (!json || !key || !text) return -1;
 
-    for (i = 0; i < sizeof(literals) / sizeof(literals[0]); i++) {
-        snprintf(search, sizeof(search), "\"%s\":%s", key, literals[i]);
+    for (; *literals; literals++) {
+        snprintf(search, sizeof(search), "\"%s\":%s", key, *literals);
         pos = strstr(json, search);
         if (pos) {
             search_len = strlen(search);
             break;
         }
     }
-    if (pos == NULL) {
-        return;
-    }
+    if (!pos) return -1;
 
-    snprintf(replace, sizeof(replace), "\"%s\":%s", key, value ? "true" : "false");
-    replace_len = strlen(replace);
+    /* The "<key>": part stays put; only the literal is replaced. */
+    prefix_len = search_len - strlen(*literals);
+    text_len = strlen(text);
     tail_len = strlen(pos + search_len);
 
-    memmove(pos + replace_len, pos + search_len, tail_len + 1);
-    memcpy(pos, replace, replace_len);
+    new_total = (size_t)(pos - json) + prefix_len + text_len + tail_len + 1;
+    if (new_total > capacity) return -1;
+
+    memmove(pos + prefix_len + text_len, pos + search_len, tail_len + 1);
+    memcpy(pos + prefix_len, text, text_len);
+    return 0;
+}
+
+static const char *const NULL_LITERAL[] = { "null", NULL };
+
+/*
+ * A number to `precision` decimal places.
+ */
+static void replace_number(char *json, size_t capacity, const char *key,
+                           double value, int precision) {
+    char fmt[16];
+    char text[64];
+
+    if (precision < 0) precision = 0;
+    if (precision > 20) precision = 20;
+    snprintf(fmt, sizeof(fmt), "%%.%df", precision);
+    snprintf(text, sizeof(text), fmt, value);
+    splice_value(json, capacity, key, NULL_LITERAL, text);
+}
+
+/*
+ * Replace a JSON null value with a string value.
+ */
+void ws_json_replace_null_string(char *json, size_t json_capacity,
+                                 const char *key, const char *value) {
+    size_t len;
+    char *quoted;
+
+    if (!value) return;
+
+    /* Quoted on the heap: a value is of any length. */
+    len = strlen(value) + 3;
+    quoted = malloc(len);
+    if (!quoted) return;
+    snprintf(quoted, len, "\"%s\"", value);
+    splice_value(json, json_capacity, key, NULL_LITERAL, quoted);
+    free(quoted);
+}
+
+/*
+ * Replace a JSON null value with a number value.
+ */
+void ws_json_replace_null_number(char *json, size_t json_capacity,
+                                 const char *key, double value) {
+    replace_number(json, json_capacity, key, value, 3);
+}
+
+/*
+ * Replace a JSON null value with an integer value.
+ */
+void ws_json_replace_null_int(char *json, size_t json_capacity,
+                              const char *key, long value) {
+    char text[32];
+    snprintf(text, sizeof(text), "%ld", value);
+    splice_value(json, json_capacity, key, NULL_LITERAL, text);
+}
+
+/*
+ * Replace a JSON null value with a boolean value.
+ */
+void ws_json_replace_null_bool(char *json, size_t json_capacity,
+                               const char *key, bool value) {
+    /* sc-prototype ships "internal":false rather than null, so an existing
+       boolean literal is replaced as well as null; otherwise the field
+       silently keeps the template's value. */
+    static const char *const literals[] = { "null", "false", "true", NULL };
+    splice_value(json, json_capacity, key, literals, value ? "true" : "false");
 }
 
 /*
@@ -319,27 +296,10 @@ int ws_require_prototype(void) {
 }
 
 /*
- * Get current Unix timestamp.
- */
-time_t ws_get_timestamp(void) {
-    return time(NULL);
-}
-
-/*
  * Handle the 'identify' command.
  */
 void ws_cmd_identify(void) {
     exit(WS_EXIT_IDENTIFY);
-}
-
-/*
- * Handle the 'list' command for single measurement type.
- */
-void ws_cmd_list_single(const char *measurement) {
-    if (measurement) {
-        printf("%s\n", measurement);
-    }
-    exit(WS_EXIT_SUCCESS);
 }
 
 /*
@@ -392,6 +352,17 @@ bool ws_arg_is_measurement(const char *arg, const char **measurements) {
         measurements++;
     }
     return false;
+}
+
+/*
+ * Does a sensor pass the internal/external filter?
+ */
+bool ws_location_filter_matches(ws_location_filter_t filter, bool internal) {
+    switch (filter) {
+        case WS_LOCATION_INTERNAL: return internal;
+        case WS_LOCATION_EXTERNAL: return !internal;
+        default:                   return true;
+    }
 }
 
 /*
@@ -664,28 +635,46 @@ const char *ws_json_object_end(const char *start) {
 /*
  * Parse a nested JSON object field from a JSON object.
  */
-char *ws_json_parse_object(const char *ptr, const char *end, const char *field) {
+/*
+ * Locate the value of "field" within [ptr, end): the first non-whitespace
+ * character after the colon, or NULL if the field is absent, lies beyond
+ * end, or has nothing after its colon.
+ *
+ * Every parser starts here, so they agree on what whitespace is. They used
+ * to carry five copies of this and disagreed: three skipped only spaces and
+ * tabs, so a value on the line after its key parsed as a string but not as
+ * a bool.
+ */
+static const char *find_value(const char *ptr, const char *end, const char *field) {
     char search[128];
     const char *field_ptr;
     const char *colon;
-    const char *obj_start;
-    const char *obj_end;
+    const char *value;
 
     if (!ptr || !end || !field) return NULL;
 
     snprintf(search, sizeof(search), "\"%s\"", field);
     field_ptr = strstr(ptr, search);
-
     if (!field_ptr || field_ptr >= end) return NULL;
 
     colon = strchr(field_ptr, ':');
     if (!colon || colon >= end) return NULL;
 
-    obj_start = colon + 1;
-    while (*obj_start == ' ' || *obj_start == '\t' ||
-           *obj_start == '\n' || *obj_start == '\r') obj_start++;
+    value = colon + 1;
+    while (value < end && (*value == ' '  || *value == '\t' ||
+                           *value == '\n' || *value == '\r')) {
+        value++;
+    }
+    if (value >= end) return NULL;
+    return value;
+}
 
-    if (*obj_start != '{') return NULL;  /* not an object */
+char *ws_json_parse_object(const char *ptr, const char *end, const char *field) {
+    const char *obj_start;
+    const char *obj_end;
+
+    obj_start = find_value(ptr, end, field);
+    if (!obj_start || *obj_start != '{') return NULL;  /* absent, or not an object */
 
     obj_end = ws_json_object_end(obj_start);
     if (!obj_end) return NULL;
@@ -697,32 +686,15 @@ char *ws_json_parse_object(const char *ptr, const char *end, const char *field) 
  * Parse a JSON string field from a JSON object.
  */
 char *ws_json_parse_string(const char *ptr, const char *end, const char *field) {
-    char search[128];
-    const char *field_ptr;
-    const char *colon;
     const char *value;
     const char *value_end;
-
-    if (!ptr || !end || !field) return NULL;
-
-    snprintf(search, sizeof(search), "\"%s\"", field);
-    field_ptr = strstr(ptr, search);
-
-    if (!field_ptr || field_ptr >= end) return NULL;
-
-    colon = strchr(field_ptr, ':');
-    if (!colon || colon >= end) return NULL;
 
     /* The value must actually be a string: the first non-whitespace character
        after the colon has to be a quote. Without this check an object- or
        number-valued field returns whatever text happens to be quoted next -
        for "location":{"latitude":51.5} that is the nested key "latitude". */
-    value = colon + 1;
-    while (value < end && (*value == ' '  || *value == '\t' ||
-                           *value == '\n' || *value == '\r')) {
-        value++;
-    }
-    if (value >= end || *value != '"') return NULL;
+    value = find_value(ptr, end, field);
+    if (!value || *value != '"') return NULL;
 
     /* Closing quote, honouring \" escapes so a value containing an escaped
        quote is not truncated at it. */
@@ -744,28 +716,11 @@ char *ws_json_parse_string(const char *ptr, const char *end, const char *field) 
  * Parse a JSON boolean field from a JSON object.
  */
 bool ws_json_parse_bool(const char *ptr, const char *end, const char *field, bool default_val) {
-    char search[128];
-    char *field_ptr;
-    char *colon;
-    
-    if (!ptr || !end || !field) return default_val;
-    
-    snprintf(search, sizeof(search), "\"%s\"", field);
-    field_ptr = strstr(ptr, search);
-    
-    if (!field_ptr || field_ptr >= end) return default_val;
-    
-    colon = strchr(field_ptr, ':');
-    if (!colon || colon >= end) return default_val;
-    
-    colon++;
-    while (*colon == ' ' || *colon == '\t') colon++;
-    
-    if (colon >= end) return default_val;
-    
-    if (strncmp(colon, "true", 4) == 0) return true;
-    if (strncmp(colon, "false", 5) == 0) return false;
-    
+    const char *value = find_value(ptr, end, field);
+
+    if (!value) return default_val;
+    if (strncmp(value, "true", 4) == 0) return true;
+    if (strncmp(value, "false", 5) == 0) return false;
     return default_val;
 }
 
@@ -773,59 +728,28 @@ bool ws_json_parse_bool(const char *ptr, const char *end, const char *field, boo
  * Parse a JSON integer field from a JSON object.
  */
 int ws_json_parse_int(const char *ptr, const char *end, const char *field, int default_val) {
-    char search[128];
-    char *field_ptr;
-    char *colon;
-    
-    if (!ptr || !end || !field) return default_val;
-    
-    snprintf(search, sizeof(search), "\"%s\"", field);
-    field_ptr = strstr(ptr, search);
-    
-    if (!field_ptr || field_ptr >= end) return default_val;
-    
-    colon = strchr(field_ptr, ':');
-    if (!colon || colon >= end) return default_val;
-    
-    colon++;
-    while (*colon == ' ' || *colon == '\t') colon++;
-    
-    if (colon >= end) return default_val;
+    const char *value = find_value(ptr, end, field);
 
-    return atoi(colon);
+    if (!value) return default_val;
+    return atoi(value);
 }
 
 /*
  * Parse a JSON floating-point field from a JSON object.
  */
 double ws_json_parse_double(const char *ptr, const char *end, const char *field, double default_val) {
-    char search[128];
-    const char *field_ptr;
-    const char *colon;
+    const char *value = find_value(ptr, end, field);
     char *value_end;
-    double value;
+    double parsed;
 
-    if (!ptr || !end || !field) return default_val;
+    if (!value) return default_val;
 
-    snprintf(search, sizeof(search), "\"%s\"", field);
-    field_ptr = strstr(ptr, search);
-
-    if (!field_ptr || field_ptr >= end) return default_val;
-
-    colon = strchr(field_ptr, ':');
-    if (!colon || colon >= end) return default_val;
-
-    colon++;
-    while (*colon == ' ' || *colon == '\t') colon++;
-
-    if (colon >= end) return default_val;
-
-    value = strtod(colon, &value_end);
+    parsed = strtod(value, &value_end);
 
     /* No conversion performed - the field was present but not a number */
-    if (value_end == colon) return default_val;
+    if (value_end == value) return default_val;
 
-    return value;
+    return parsed;
 }
 
 /* ============================================================================
@@ -1001,6 +925,23 @@ char *ws_geolocation_geojson(const ws_geolocation_t *g) {
 #define WS_LOC_ABSENT (-1e300)
 
 /*
+ * Which source a location token names; -1 if it is not one of the two.
+ * The one definition of what a token means, shared by the config parser,
+ * which warns on a bad one, and ws_location_from_token(), which errors.
+ */
+static int token_source(const char *token, ws_location_source_t *source) {
+    if (strcmp(token, "{{node}}") == 0) {
+        *source = WS_LOC_NODE;
+        return 0;
+    }
+    if (strcmp(token, "{{none}}") == 0) {
+        *source = WS_LOC_NONE;
+        return 0;
+    }
+    return -1;
+}
+
+/*
  * Parse the "location" field of one sensor config object.
  */
 int ws_parse_sensor_location(const char *ptr, const char *end, ws_location_t *out) {
@@ -1057,11 +998,9 @@ int ws_parse_sensor_location(const char *ptr, const char *end, ws_location_t *ou
     /* Token form. */
     token = ws_json_parse_string(ptr, end, "location");
     if (token) {
-        if (strcmp(token, "{{node}}") == 0) {
-            out->source = WS_LOC_NODE;
-        } else if (strcmp(token, "{{none}}") == 0) {
-            out->source = WS_LOC_NONE;
-        } else {
+        /* A typo is a warning here, not an error: it must not stop a sensor
+           reporting readings, so the location is left undeclared. */
+        if (token_source(token, &out->source) != 0) {
             ws_log_warning("Unrecognised sensor location \"%s\"; expected "
                            "\"{{node}}\", \"{{none}}\" or coordinates", token);
         }
@@ -1089,14 +1028,7 @@ int ws_location_from_token(const char *token, ws_location_t *out) {
     out->source = WS_LOC_UNDECLARED;
 
     if (!token || !*token) return 0;
-    if (strcmp(token, "{{node}}") == 0) {
-        out->source = WS_LOC_NODE;
-        return 0;
-    }
-    if (strcmp(token, "{{none}}") == 0) {
-        out->source = WS_LOC_NONE;
-        return 0;
-    }
+    if (token_source(token, &out->source) == 0) return 0;
 
     ws_log_error("Unknown location %s; expected {{node}} or {{none}}", token);
     return -1;
@@ -1402,6 +1334,23 @@ int ws_config_assign_fallback_ids(void *entries, size_t stride, int count,
 }
 
 /*
+ * Build "<sensor_id>_<measurement>".
+ */
+char *ws_measurement_id(const char *sensor_id, const char *measurement) {
+    size_t len;
+    char *out;
+
+    if (!sensor_id || !measurement) return NULL;
+
+    len = strlen(sensor_id) + strlen(measurement) + 2;  /* '_' and terminator */
+    out = malloc(len);
+    if (!out) return NULL;
+
+    snprintf(out, len, "%s_%s", sensor_id, measurement);
+    return out;
+}
+
+/*
  * Get serial number with suffix appended.
  */
 char *ws_get_serial_with_suffix(const char *suffix) {
@@ -1493,21 +1442,48 @@ static void builder_add_comma(ws_json_builder_t *builder) {
  * Add a string field to the JSON object.
  */
 void ws_json_builder_add_string(ws_json_builder_t *builder, const char *key, const char *value) {
-    char escaped[1024];
-    char field[1280];
-    
+    char field[160];
+    size_t len;
+    char *escaped;
+
     if (!builder || !key) return;
-    
+
     builder_add_comma(builder);
-    
-    if (value) {
-        ws_json_escape_string(value, escaped, sizeof(escaped));
-        snprintf(field, sizeof(field), "\"%s\":\"%s\"", key, escaped);
-    } else {
-        snprintf(field, sizeof(field), "\"%s\":null", key);
-    }
-    
+    snprintf(field, sizeof(field), "\"%s\":", key);
     builder_append(builder, field);
+
+    if (!value) {
+        builder_append(builder, "null");
+        return;
+    }
+
+    /* Escaped on the heap: a value is of any length, and a clipped one is
+       exactly the corruption escaping exists to prevent. */
+    len = strlen(value) * 2 + 1;
+    escaped = malloc(len);
+    if (!escaped) {
+        builder->error = 1;
+        return;
+    }
+    ws_json_escape_string(value, escaped, len);
+    builder_append(builder, "\"");
+    builder_append(builder, escaped);
+    builder_append(builder, "\"");
+    free(escaped);
+}
+
+/*
+ * Add a field whose value is already JSON: a nested object or array.
+ */
+void ws_json_builder_add_raw(ws_json_builder_t *builder, const char *key, const char *raw_json) {
+    char field[160];
+
+    if (!builder || !key || !raw_json) return;
+
+    builder_add_comma(builder);
+    snprintf(field, sizeof(field), "\"%s\":", key);
+    builder_append(builder, field);
+    builder_append(builder, raw_json);
 }
 
 /*
@@ -1701,14 +1677,6 @@ void ws_json_array_free(ws_json_array_builder_t *builder) {
  * ============================================================================ */
 
 /*
- * Format a Unix timestamp as a string.
- */
-void ws_format_timestamp(char *buffer, size_t bufsize, time_t timestamp) {
-    if (!buffer || bufsize == 0) return;
-    snprintf(buffer, bufsize, "%ld", (long)timestamp);
-}
-
-/*
  * Replace "key":null with the escaped form of a caller's string.
  *
  * The one place a string from outside the library - a config file, a command
@@ -1787,10 +1755,10 @@ int ws_build_sensor_json_base(char *output, size_t output_len,
         }
     }
 
-    ws_json_replace_null_bool(output, "internal", internal);
+    ws_json_replace_null_bool(output, output_len, "internal", internal);
     
     /* Add timestamp as integer */
-    ws_json_replace_null_int(output, "timestamp", (long)timestamp);
+    ws_json_replace_null_int(output, output_len, "timestamp", (long)timestamp);
     
     return 0;
 }
@@ -1798,28 +1766,9 @@ int ws_build_sensor_json_base(char *output, size_t output_len,
 /*
  * Add value field to sensor JSON.
  */
-void ws_sensor_json_set_value(char *json, double value, int precision) {
-    char value_str[64];
-    char fmt[16];
-    
-    if (!json) return;
-    
-    snprintf(fmt, sizeof(fmt), "%%.%df", precision);
-    snprintf(value_str, sizeof(value_str), fmt, value);
-    
-    /* Replace "value":null with "value":X.XX */
-    char search[] = "\"value\":null";
-    char replace[128];
-    snprintf(replace, sizeof(replace), "\"value\":%s", value_str);
-    
-    char *pos = strstr(json, search);
-    if (pos) {
-        size_t search_len = strlen(search);
-        size_t replace_len = strlen(replace);
-        size_t tail_len = strlen(pos + search_len);
-        memmove(pos + replace_len, pos + search_len, tail_len + 1);
-        memcpy(pos, replace, replace_len);
-    }
+void ws_sensor_json_set_value(char *json, size_t json_capacity,
+                              double value, int precision) {
+    replace_number(json, json_capacity, "value", value, precision);
 }
 
 /*
@@ -1847,7 +1796,7 @@ void ws_sensor_json_set_result(char *json, size_t json_capacity, double value,
     if (error_msg && error_msg[0] != '\0') {
         ws_sensor_json_set_error(json, json_capacity, error_msg);
     } else {
-        ws_sensor_json_set_value(json, value, precision);
+        ws_sensor_json_set_value(json, json_capacity, value, precision);
     }
 }
 
@@ -1856,116 +1805,10 @@ void ws_sensor_json_set_result(char *json, size_t json_capacity, double value,
  */
 void ws_json_replace_null_raw(char *json, size_t json_capacity,
                               const char *key, const char *raw_json) {
-    char search[128];
-    char *pos;
-    size_t search_len, prefix_len, raw_len, tail_len, new_total;
-
-    if (!json || !key || !raw_json) return;
-
-    snprintf(search, sizeof(search), "\"%s\":null", key);
-    pos = strstr(json, search);
-    if (!pos) return;
-
-    search_len = strlen(search);
-    /* The "<key>": part stays put; only the four characters of null go. */
-    prefix_len = search_len - 4;
-    raw_len = strlen(raw_json);
-    tail_len = strlen(pos + search_len);
-
-    new_total = (size_t)(pos - json) + prefix_len + raw_len + tail_len + 1;
-    if (new_total > json_capacity) return;
-
-    memmove(pos + prefix_len + raw_len, pos + search_len, tail_len + 1);
-    memcpy(pos + prefix_len, raw_json, raw_len);
+    splice_value(json, json_capacity, key, NULL_LITERAL, raw_json);
 }
 
 void ws_sensor_json_set_config(char *json, size_t json_capacity, const char *config_json) {
     ws_json_replace_null_raw(json, json_capacity, "config", config_json);
 }
 
-/*
- * Build a config JSON object with common fields.
- */
-int ws_build_config_base(char *buffer, size_t bufsize, const char *version) {
-    if (!buffer || bufsize == 0) return 0;
-    
-    if (version) {
-        return snprintf(buffer, bufsize, "{\"software_version\":\"%s\"", version);
-    } else {
-        return snprintf(buffer, bufsize, "{");
-    }
-}
-
-/*
- * Append a string field to a config JSON object.
- */
-int ws_config_add_string(char *buffer, size_t bufsize, const char *key, const char *value) {
-    size_t current_len;
-    char append[256];
-    int append_len;
-    
-    if (!buffer || !key || !value) return 0;
-    
-    current_len = strlen(buffer);
-    if (current_len >= bufsize - 1) return 0;
-    
-    append_len = snprintf(append, sizeof(append), ",\"%s\":\"%s\"", key, value);
-    if (current_len + append_len >= bufsize) return 0;
-    
-    strcat(buffer, append);
-    return append_len;
-}
-
-/*
- * Append an integer field to a config JSON object.
- */
-int ws_config_add_int(char *buffer, size_t bufsize, const char *key, long value) {
-    size_t current_len;
-    char append[128];
-    int append_len;
-    
-    if (!buffer || !key) return 0;
-    
-    current_len = strlen(buffer);
-    if (current_len >= bufsize - 1) return 0;
-    
-    append_len = snprintf(append, sizeof(append), ",\"%s\":%ld", key, value);
-    if (current_len + append_len >= bufsize) return 0;
-    
-    strcat(buffer, append);
-    return append_len;
-}
-
-/*
- * Append a nested JSON object to a config JSON object.
- */
-int ws_config_add_object(char *buffer, size_t bufsize, const char *key, const char *object_json) {
-    size_t current_len;
-    char append[1024];
-    int append_len;
-    
-    if (!buffer || !key || !object_json) return 0;
-    
-    current_len = strlen(buffer);
-    if (current_len >= bufsize - 1) return 0;
-    
-    append_len = snprintf(append, sizeof(append), ",\"%s\":%s", key, object_json);
-    if (current_len + append_len >= bufsize) return 0;
-    
-    strcat(buffer, append);
-    return append_len;
-}
-
-/*
- * Close a config JSON object.
- */
-void ws_config_end(char *buffer) {
-    size_t len;
-    
-    if (!buffer) return;
-    
-    len = strlen(buffer);
-    if (len > 0) {
-        strcat(buffer, "}");
-    }
-}

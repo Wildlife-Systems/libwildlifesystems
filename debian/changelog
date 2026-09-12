@@ -1,5 +1,27 @@
 libwildlifesystems (1.3.0) stable; urgency=medium
 
+  * Consolidate what the library did more than once. The six copies of the
+    find-null-and-splice sequence behind the replacers are one; the five
+    copies of the field-finder behind the parsers are one, which also fixes
+    the bool, int and double parsers not skipping a newline after the colon
+    where the string and object parsers did; the three config appenders and
+    the three loggers are one each; and the config parser matches location
+    tokens through the same code as ws_location_from_token
+  * ws_json_replace_null_number, _int, _bool and ws_sensor_json_set_value
+    take the buffer capacity, as the string and raw variants already did, and
+    refuse rather than overrun. No driver calls them directly
+  * Remove ws_build_config_base, ws_config_add_string, ws_config_add_int,
+    ws_config_add_object and ws_config_end. They were a second, weaker way to
+    build a JSON object beside ws_json_builder, without escaping; the builder
+    gains ws_json_builder_add_raw for nesting and sensor-bme680 uses it
+    instead. The builder escapes on the heap rather than through a 1024-byte
+    buffer that clipped a long value
+  * Remove ws_cmd_list_single, ws_format_timestamp and ws_get_timestamp,
+    which nothing called: a one-measurement driver lists through
+    ws_cmd_list_multiple so its usage line and filters read the same array,
+    and the timestamp goes into the template as an integer
+  * Add ws_measurement_id and ws_location_filter_matches, each of which two
+    or three drivers carried their own copy of
   * Add ws_config_assign_fallback_ids(). A config entry without a sensor_id
     used to get "<serial>_<driver>" from each driver's own code, so two such
     entries got the same id and downstream merged them into one series
