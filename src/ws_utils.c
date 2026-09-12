@@ -346,6 +346,45 @@ void ws_cmd_list_multiple(const char **measurements) {
 }
 
 /*
+ * Print a driver's usage line.
+ */
+void ws_cmd_usage(const char *program, const char **measurements) {
+    if (!program) return;
+
+    fprintf(stderr, "Usage: %s [--version|identify|list|setup|enable|mock", program);
+    if (measurements) {
+        while (*measurements) {
+            fprintf(stderr, "|%s", *measurements);
+            measurements++;
+        }
+    }
+    fprintf(stderr, "|internal|external|all]\n");
+}
+
+/*
+ * Report an unrecognised argument.
+ */
+int ws_cmd_unknown_arg(const char *program, const char *arg,
+                       const char **measurements) {
+    fprintf(stderr, "Unknown command: %s\n", arg ? arg : "");
+    ws_cmd_usage(program, measurements);
+    return WS_EXIT_INVALID_ARG;
+}
+
+/*
+ * Is arg one of the driver's measurement names?
+ */
+bool ws_arg_is_measurement(const char *arg, const char **measurements) {
+    if (!arg || !measurements) return false;
+
+    while (*measurements) {
+        if (strcmp(arg, *measurements) == 0) return true;
+        measurements++;
+    }
+    return false;
+}
+
+/*
  * Handle the 'mock' command.
  */
 int ws_cmd_mock(const char *device, const char *serial_suffix,

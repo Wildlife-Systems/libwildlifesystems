@@ -10,6 +10,12 @@ libwildlifesystems (1.3.0) stable; urgency=medium
     so moving and re-surveying a node does not retrospectively relocate its own
     history. Where the node has no usable location the token is emitted
     unresolved, keeping the declaration rather than discarding it
+  * Add ws_cmd_usage, ws_cmd_unknown_arg and ws_arg_is_measurement, so a
+    driver's usage line, the measurement filters it accepts and the measurements
+    it lists all read from one array and cannot disagree. The hand-written usage
+    strings had already drifted: sensor-bme680's omitted the four measurements
+    its list command advertises, which is how it went unnoticed that it rejected
+    all of them
   * Add ws_cmd_mock and ws_mock_reading_t. Each driver hand-rolled its "mock"
     command, and the copies had drifted: sensor-dht11 left its temperature
     sensor_id unsuffixed where a real read suffixes it, sensor-w1therm never got

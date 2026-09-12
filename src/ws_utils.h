@@ -225,6 +225,43 @@ void ws_cmd_list_single(const char *measurement);
 void ws_cmd_list_multiple(const char **measurements);
 
 /*
+ * Print a driver's usage line to stderr.
+ *
+ * The measurement names are the same NULL-terminated array given to
+ * ws_cmd_list_multiple(), so usage cannot advertise a measurement the driver
+ * will not accept, nor omit one it will. Hand-written usage strings had already
+ * drifted from both.
+ *
+ * @param program       Program name, e.g. "sensor-dht11"
+ * @param measurements  NULL-terminated measurement names, or NULL for none
+ */
+void ws_cmd_usage(const char *program, const char **measurements);
+
+/*
+ * Report an unrecognised argument, with the usage, and give the exit code.
+ *
+ * @param program       Program name
+ * @param arg           The unrecognised argument
+ * @param measurements  NULL-terminated measurement names, or NULL for none
+ * @return              WS_EXIT_INVALID_ARG, so a driver can return this directly
+ */
+int ws_cmd_unknown_arg(const char *program, const char *arg,
+                       const char **measurements);
+
+/*
+ * Is `arg` one of the driver's measurement names?
+ *
+ * Lets a driver accept exactly the measurements it lists, read from the same
+ * array, so what it lists, what it accepts and what it prints in usage cannot
+ * disagree.
+ *
+ * @param arg           Argument to test
+ * @param measurements  NULL-terminated measurement names, or NULL for none
+ * @return              true if arg names a measurement
+ */
+bool ws_arg_is_measurement(const char *arg, const char **measurements);
+
+/*
  * One reading of a driver's "mock" output.
  *
  * Drivers keep their own plausible values: what a reading should look like is
