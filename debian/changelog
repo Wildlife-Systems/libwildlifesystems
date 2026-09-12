@@ -10,6 +10,16 @@ libwildlifesystems (1.3.0) stable; urgency=medium
     so moving and re-surveying a node does not retrospectively relocate its own
     history. Where the node has no usable location the token is emitted
     unresolved, keeping the declaration rather than discarding it
+  * Add ws_cmd_mock and ws_mock_reading_t. Each driver hand-rolled its "mock"
+    command, and the copies had drifted: sensor-dht11 left its temperature
+    sensor_id unsuffixed where a real read suffixes it, sensor-w1therm never got
+    the missing-serial fallback the others have, and a missing template produced
+    an empty array from two drivers and no output at all from the third. Drivers
+    now give a table of values and the library builds the readings exactly as a
+    real read does. A missing template fails with no output rather than an empty
+    array that would read as "no sensors". Readings share one timestamp, as a
+    real read does. An empty id_suffix means no suffix, for a driver with one
+    measurement per sensor
   * Add ws_boot_config_path, ws_boot_config_has, ws_boot_config_add and
     ws_cmd_enable_boot_config. Editing the Pi boot config is how a driver's
     "enable" command makes its bus usable, and none of it is specific to one

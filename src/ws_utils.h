@@ -225,6 +225,50 @@ void ws_cmd_list_single(const char *measurement);
 void ws_cmd_list_multiple(const char **measurements);
 
 /*
+ * One reading of a driver's "mock" output.
+ *
+ * Drivers keep their own plausible values: what a reading should look like is
+ * the driver's business, and a table at the call site reads better than the
+ * same values hidden behind library arguments.
+ */
+typedef struct {
+    const char *sensor;     /* Sensor name, e.g. "bme680_temperature" */
+    const char *measures;   /* Quantity measured, e.g. "temperature" */
+    const char *id_suffix;  /* sensor_id suffix: NULL to use measures, "" for no
+                               suffix at all. Needed because the gas reading
+                               measures "resistance" but is identified as
+                               "<id>_gas_resistance", while a single-measurement
+                               driver suffixes nothing */
+    const char *unit;       /* A WS_UNIT_* constant */
+    double value;           /* The value to report */
+    int precision;          /* Decimal places */
+} ws_mock_reading_t;
+
+/*
+ * Handle the 'mock' command: emit fixed readings in the real output format.
+ *
+ * The point of mock is to look exactly like a real read, so the readings are
+ * built the same way, with sensor_id suffixed per measurement and the array
+ * assembled by the library rather than by hand. All readings share a timestamp.
+ *
+ * A host with no Pi serial still produces usable output, falling back to
+ * serial_suffix as the id: mock exists to work without the hardware.
+ *
+ * Prints nothing and fails if the template is unavailable, rather than emitting
+ * an empty array that would read as "this node has no sensors".
+ *
+ * @param device        Physical device model, e.g. "dht11", or NULL
+ * @param serial_suffix Suffix for the Pi serial, e.g. "dht11_mock"
+ * @param sensor_name   sensor_name for every reading, e.g. "Mock DHT11"
+ * @param readings      The readings to emit
+ * @param count         How many
+ * @return              WS_EXIT_SUCCESS, or WS_EXIT_INVALID_ARG on failure
+ */
+int ws_cmd_mock(const char *device, const char *serial_suffix,
+                const char *sensor_name,
+                const ws_mock_reading_t *readings, size_t count);
+
+/*
  * Get Raspberry Pi serial number from /proc/cpuinfo.
  * Returns just the raw serial number without any suffix.
  * Returns dynamically allocated string, caller must free.

@@ -346,6 +346,88 @@ void ws_cmd_list_multiple(const char **measurements) {
 }
 
 /*
+ * Handle the 'mock' command.
+ */
+int ws_cmd_mock(const char *device, const char *serial_suffix,
+                const char *sensor_name,
+                const ws_mock_reading_t *readings, size_t count) {
+    ws_json_array_builder_t out;
+    char *serial;
+    const char *base;
+    const char *json;
+    time_t now;
+    size_t i;
+
+    if (!readings || count == 0) return WS_EXIT_INVALID_ARG;
+
+    /* Check the template before printing anything, so a failure leaves no
+       half-written array, and do not pass an empty array off as a good read. */
+    if (!ws_get_prototype_cached()) {
+        ws_log_error("sc-prototype failed - cannot generate JSON");
+        return WS_EXIT_INVALID_ARG;
+    }
+
+    /* Mock has to work on a host with no Pi serial, that being the situation it
+       exists for, so fall back to the suffix alone rather than emitting null. */
+    serial = serial_suffix ? ws_get_serial_with_suffix(serial_suffix) : NULL;
+    base = serial ? serial : (serial_suffix ? serial_suffix : "mock");
+
+    if (ws_json_array_init(&out) != 0) {
+        ws_log_error("Out of memory building mock readings");
+        free(serial);
+        return WS_EXIT_INVALID_ARG;
+    }
+
+    /* One timestamp: a real read reports its readings as taken together. */
+    now = time(NULL);
+
+    for (i = 0; i < count; i++) {
+        const ws_mock_reading_t *r = &readings[i];
+        char reading[2048];
+        char sensor_id[256];
+
+        {
+            /* An empty suffix means the driver identifies the sensor without
+               one, as a single-measurement driver does. */
+            const char *suffix = r->id_suffix ? r->id_suffix : r->measures;
+            if (*suffix) {
+                snprintf(sensor_id, sizeof(sensor_id), "%s_%s", base, suffix);
+            } else {
+                snprintf(sensor_id, sizeof(sensor_id), "%s", base);
+            }
+        }
+
+        if (ws_build_sensor_json_base(reading, sizeof(reading), r->sensor, device,
+                                      r->measures, r->unit, sensor_id, sensor_name,
+                                      false, NULL, now) != 0) {
+            ws_log_error("sc-prototype failed - cannot generate JSON");
+            ws_json_array_free(&out);
+            free(serial);
+            return WS_EXIT_INVALID_ARG;
+        }
+
+        ws_sensor_json_set_result(reading, sizeof(reading), r->value,
+                                  r->precision, NULL);
+        ws_json_array_add(&out, reading);
+    }
+
+    ws_json_array_end(&out);
+    json = ws_json_array_get(&out);
+    if (!json) {
+        ws_log_error("Out of memory building mock readings");
+        ws_json_array_free(&out);
+        free(serial);
+        return WS_EXIT_INVALID_ARG;
+    }
+
+    printf("%s\n", json);
+
+    ws_json_array_free(&out);
+    free(serial);
+    return WS_EXIT_SUCCESS;
+}
+
+/*
  * Get Raspberry Pi serial number from /proc/cpuinfo.
  * Returns dynamically allocated string, caller must free.
  */
@@ -699,7 +781,18 @@ int ws_read_geolocation(ws_geolocation_t *out) {
 
     buffer = ws_read_file(path, NULL);
     if (!buffer) {
-        /* A node that has not been surveyed is a normal state, not a failure. */
+        /* Absent is a normal state: a node that has not been surveyed yet.
+           Present but unreadable is not, and the two are worth telling apart.
+           The file is deliberately mode 0600 - a node's position can be
+           sensitive - so an unprivileged caller gets exactly the same silence
+           as an unsurveyed node, and "{{node}}" resolves to nothing with no
+           indication why. */
+        if (access(path, F_OK) == 0) {
+            ws_log_warning("%s exists but could not be read, so \"{{node}}\" "
+                           "cannot be resolved. The file is mode 0600 by "
+                           "design; this usually means the caller is not root",
+                           path);
+        }
         return 0;
     }
 

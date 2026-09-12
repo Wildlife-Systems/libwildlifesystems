@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <sys/stat.h>   /* chmod, for the unreadable-file test */
 #include <math.h>
 
 #include "unity.h"
@@ -526,6 +527,42 @@ void test_geo_missing_file(void) {
     unsetenv("GEOLOC_FILE");
 }
 
+/* Present but unreadable is a different case from absent: /etc/geolocation is
+   mode 0600 by design, so an unprivileged caller must not be given the same
+   silence as an unsurveyed node. The call still succeeds with valid = 0 -
+   losing the location must not stop a sensor reporting - but it warns.
+   Skipped when running as root, which can read the file regardless. */
+void test_geo_unreadable_file_is_not_absent(void) {
+    ws_geolocation_t g;
+
+    /* This stub Unity has no ignore mechanism, so an inapplicable case simply
+       returns. Each skip says why, rather than passing silently. */
+    if (geteuid() == 0) {
+        printf("  (skipped: running as root)\n");
+        return;
+    }
+
+    write_file("51.4967\n-0.1764\n12.0\n5.0\n");
+    if (chmod(temp_file_path, 0) != 0) {
+        printf("  (skipped: chmod unsupported here)\n");
+        return;
+    }
+    /* Confirm the premise before relying on it: a filesystem that ignores mode
+       bits would make this test silently vacuous. */
+    if (access(temp_file_path, R_OK) == 0) {
+        printf("  (skipped: filesystem ignores mode bits)\n");
+        chmod(temp_file_path, 0600);
+        return;
+    }
+
+    setenv("GEOLOC_FILE", temp_file_path, 1);
+    TEST_ASSERT_EQUAL_INT(0, ws_read_geolocation(&g));
+    TEST_ASSERT_FALSE(g.valid);
+    unsetenv("GEOLOC_FILE");
+
+    chmod(temp_file_path, 0600);  /* so tearDown can unlink it */
+}
+
 void test_geo_comment_only_file(void) {
     ws_geolocation_t g = read_geo("# nothing here yet\n\n");
     TEST_ASSERT_FALSE(g.valid);
@@ -801,6 +838,21 @@ static size_t count_occurrences(const char *haystack, const char *needle) {
         p += len;
     }
     return n;
+}
+
+/* ========== Mock Command Tests ========== */
+
+/* Argument validation only: the rest of ws_cmd_mock writes to stdout and
+   depends on sc-prototype being installed, so it is covered by running the
+   drivers rather than from here. */
+void test_cmd_mock_rejects_no_readings(void) {
+    static const ws_mock_reading_t one[] = {
+        { "s", "temperature", NULL, WS_UNIT_CELSIUS, 1.0, 1 },
+    };
+    TEST_ASSERT_EQUAL_INT(WS_EXIT_INVALID_ARG,
+        ws_cmd_mock("dev", "dev_mock", "Mock", NULL, 1));
+    TEST_ASSERT_EQUAL_INT(WS_EXIT_INVALID_ARG,
+        ws_cmd_mock("dev", "dev_mock", "Mock", one, 0));
 }
 
 /* ========== Boot Configuration Tests ========== */
@@ -1455,6 +1507,7 @@ int main(void) {
     RUN_TEST(test_geo_three_values);
     RUN_TEST(test_geo_one_value_invalid);
     RUN_TEST(test_geo_missing_file);
+    RUN_TEST(test_geo_unreadable_file_is_not_absent);
     RUN_TEST(test_geo_comment_only_file);
     RUN_TEST(test_geo_latitude_out_of_range);
     RUN_TEST(test_geo_longitude_out_of_range);
@@ -1493,6 +1546,9 @@ int main(void) {
     RUN_TEST(test_read_file_with_size);
     RUN_TEST(test_read_file_not_found);
     
+    /* Mock command tests */
+    RUN_TEST(test_cmd_mock_rejects_no_readings);
+
     /* Boot configuration tests */
     RUN_TEST(test_boot_config_path_honours_override);
     RUN_TEST(test_boot_config_has_finds_directive);
