@@ -33,7 +33,7 @@ LIBDIR = $(PREFIX)/lib
 INCLUDEDIR = $(PREFIX)/include/ws
 BINDIR = $(PREFIX)/bin
 
-.PHONY: all clean install tools test
+.PHONY: all clean install uninstall tools test
 
 all: $(BUILDDIR) $(LIB) $(TOOLS)
 
@@ -64,6 +64,14 @@ install: $(LIB) $(TOOLS)
 	install -m 644 $(SRCDIR)/ws_utils.h $(DESTDIR)$(INCLUDEDIR)/
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 755 $(BUILDDIR)/ws-emit $(DESTDIR)$(BINDIR)/
+
+# The inverse of install: everything it put down, and the include directory
+# if this was the last thing in it.
+uninstall:
+	rm -f $(DESTDIR)$(LIBDIR)/$(LIB)
+	rm -f $(DESTDIR)$(INCLUDEDIR)/ws_utils.h
+	rm -f $(DESTDIR)$(BINDIR)/ws-emit
+	-rmdir $(DESTDIR)$(INCLUDEDIR) 2>/dev/null
 
 clean:
 	rm -rf $(BUILDDIR) $(LIB)

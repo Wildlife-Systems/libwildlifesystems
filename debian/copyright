@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: ws-utils
-Source: https://github.com/wildlifesystems/ws-utils
+Upstream-Name: libwildlifesystems
+Source: https://github.com/Wildlife-Systems/libwildlifesystems
 
 Files: *
 Copyright: 2024 Wildlife Systems

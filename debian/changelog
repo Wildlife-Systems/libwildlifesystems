@@ -1,5 +1,10 @@
 libwildlifesystems (1.3.0) stable; urgency=medium
 
+  * Packaging: the Maintainer field names the person who signs the changelog,
+    as it does in every other WildlifeSystems package, rather than a role
+    address that did not match; debian/copyright names this project rather
+    than ws-utils, its former name; Standards-Version 4.6.1. The Makefile
+    gains an uninstall target, the inverse of install
   * Consolidate what the library did more than once. The six copies of the
     find-null-and-splice sequence behind the replacers are one; the five
     copies of the field-finder behind the parsers are one, which also fixes
