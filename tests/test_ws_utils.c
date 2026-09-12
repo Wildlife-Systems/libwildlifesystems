@@ -1048,7 +1048,21 @@ void test_location_from_token_absent_is_undeclared(void) {
    own mock table or ws-emit's command line, and both are mistakes to correct. */
 void test_location_from_token_unknown_is_an_error(void) {
     ws_location_t l;
-    TEST_ASSERT_EQUAL_INT(-1, ws_location_from_token("{{somewhere}}", &l));
+    int saved_stderr, devnull, rc;
+
+    /* The rejection is logged, which is right for a driver and wrong for a
+       build log, so keep it out of the test output. */
+    fflush(stderr);
+    saved_stderr = dup(2);
+    devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) { dup2(devnull, 2); close(devnull); }
+
+    rc = ws_location_from_token("{{somewhere}}", &l);
+
+    fflush(stderr);
+    if (saved_stderr >= 0) { dup2(saved_stderr, 2); close(saved_stderr); }
+
+    TEST_ASSERT_EQUAL_INT(-1, rc);
     TEST_ASSERT_EQUAL_INT(WS_LOC_UNDECLARED, l.source);
     TEST_ASSERT_EQUAL_INT(-1, ws_location_from_token("{{node}}", NULL));
 }
