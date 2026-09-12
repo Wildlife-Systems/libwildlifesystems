@@ -1077,6 +1077,9 @@ static char *capture_mock(const ws_mock_reading_t *readings, size_t count,
 
     install_fake_prototype();
     setenv("GEOLOC_FILE", "/nonexistent/ws-test-geolocation", 1);
+    /* No node serial, so the ids take the fixed "dev_mock" prefix whatever
+       host this runs on; a Pi would otherwise put its own serial in front. */
+    setenv("WS_CPUINFO_FILE", "/nonexistent/ws-test-cpuinfo", 1);
 
     /* stdout to the temp file to be read back; stderr to /dev/null so a
        deliberately bad table does not print an error into a build log. */
@@ -1096,6 +1099,7 @@ static char *capture_mock(const ws_mock_reading_t *readings, size_t count,
     if (saved_stdout >= 0) { dup2(saved_stdout, 1); close(saved_stdout); }
     if (saved_stderr >= 0) { dup2(saved_stderr, 2); close(saved_stderr); }
     unsetenv("GEOLOC_FILE");
+    unsetenv("WS_CPUINFO_FILE");
 
     content = ws_read_file(temp_file_path, NULL);
     return content ? content : strdup("");
