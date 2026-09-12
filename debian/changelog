@@ -10,6 +10,18 @@ libwildlifesystems (1.3.0) stable; urgency=medium
     so moving and re-surveying a node does not retrospectively relocate its own
     history. Where the node has no usable location the token is emitted
     unresolved, keeping the declaration rather than discarding it
+  * Add ws_sensor_json_set_result, which sets either "value" or "error" and
+    never both. sensor-w1therm was reporting the DS18B20 power-on sentinel
+    (85.000) and the insufficient-power sentinel (127.937) in "value" next to
+    the error naming them, so a consumer reading "value" without checking
+    "error" ingested them as temperatures
+  * ws_json_replace_null_string now takes the buffer capacity and refuses a
+    value that will not fit, rather than formatting through a fixed 512-byte
+    buffer. An over-long sensor_name or sensor_id was clipped mid-value, which
+    left the JSON string unterminated and so invalidated the entire reading
+    array, not merely that one field. ws_sensor_json_set_error and
+    ws_sensor_json_set_result take the capacity for the same reason; the scalar
+    replacers do not, their inserted text being of bounded length
   * ws_parse_sensor_location logs when a sensor declares no location, so an
     unconfigured sensor is distinguishable from one whose config was never
     read. Syslog only: it fires once per sensor per read cycle and would

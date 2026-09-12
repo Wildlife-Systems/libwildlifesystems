@@ -101,14 +101,28 @@ void ws_json_escape_string(const char *src, char *dst, size_t dst_len);
  * Replace a JSON null value with a string value.
  * e.g. "field":null -> "field":"value"
  *
- * @param json     JSON string to modify (in-place)
- * @param key      Field name to search for
- * @param value    String value to insert (without quotes)
+ * The value is inserted verbatim, so a caller passing text that may contain a
+ * quote or backslash must escape it first with ws_json_escape_string().
+ *
+ * Does nothing if the key is not present as null, or if the result would not
+ * fit in json_capacity. A value too long to fit is refused outright rather
+ * than clipped: a clipped value would leave the JSON string unterminated and
+ * invalidate the whole document, not merely this one field.
+ *
+ * @param json          JSON buffer to modify (in-place)
+ * @param json_capacity Size of the buffer
+ * @param key           Field name to search for
+ * @param value         String value to insert (without quotes)
  */
-void ws_json_replace_null_string(char *json, const char *key, const char *value);
+void ws_json_replace_null_string(char *json, size_t json_capacity,
+                                 const char *key, const char *value);
 
 /*
  * Replace a JSON null value with a number value.
+ *
+ * Takes no capacity: the inserted text is a formatted scalar of bounded
+ * length, unlike the string and raw variants, which insert caller-supplied
+ * text and so require the buffer size.
  * e.g. "value":null -> "value":23.456
  *
  * @param json     JSON string to modify (in-place)
@@ -657,10 +671,37 @@ void ws_sensor_json_set_value(char *json, double value, int precision);
  * Add error field to sensor JSON and set value to null.
  * Use after ws_build_sensor_json_base().
  *
- * @param json      JSON buffer to modify
- * @param error_msg Error message (will be escaped)
+ * Where the reading may or may not have failed, prefer
+ * ws_sensor_json_set_result(), which cannot emit a value alongside the error.
+ *
+ * @param json          JSON buffer to modify
+ * @param json_capacity Size of the buffer
+ * @param error_msg     Error message (will be escaped)
  */
-void ws_sensor_json_set_error(char *json, const char *error_msg);
+void ws_sensor_json_set_error(char *json, size_t json_capacity,
+                              const char *error_msg);
+
+/*
+ * Set a reading's outcome: a value or an error, never both.
+ *
+ * Exactly one field is populated. A NULL or empty error_msg means the reading
+ * succeeded, so "value" is set and "error" stays null; otherwise "error" is
+ * set and "value" stays null.
+ *
+ * Prefer this to choosing between ws_sensor_json_set_value() and
+ * ws_sensor_json_set_error() at each call site. It keeps the choice in one
+ * place, so a driver cannot report a sentinel reading next to the error that
+ * says to disregard it.
+ *
+ * @param json          JSON buffer to modify
+ * @param json_capacity Size of the buffer
+ * @param value         Numeric value; used only when error_msg means success
+ * @param precision     Decimal places for value (e.g. 3 for "21.375")
+ * @param error_msg     Error message (escaped by the library), or NULL/"" when
+ *                      the reading succeeded
+ */
+void ws_sensor_json_set_result(char *json, size_t json_capacity, double value,
+                               int precision, const char *error_msg);
 
 /*
  * Set the config field in sensor JSON to a custom JSON object.

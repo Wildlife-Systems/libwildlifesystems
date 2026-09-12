@@ -113,30 +113,37 @@ void ws_json_escape_string(const char *src, char *dst, size_t dst_len) {
 /*
  * Replace a JSON null value with a string value.
  */
-void ws_json_replace_null_string(char *json, const char *key, const char *value) {
+void ws_json_replace_null_string(char *json, size_t json_capacity,
+                                 const char *key, const char *value) {
     char search[128];
-    char replace[512];
     char *pos;
-    size_t search_len, replace_len, tail_len;
-    
+    size_t search_len, prefix_len, value_len, tail_len, new_total;
+
     if (!json || !key || !value) return;
-    
+
     snprintf(search, sizeof(search), "\"%s\":null", key);
-    snprintf(replace, sizeof(replace), "\"%s\":\"%s\"", key, value);
-    
     pos = strstr(json, search);
     if (pos == NULL) {
         return;
     }
-    
+
     search_len = strlen(search);
-    replace_len = strlen(replace);
+    /* The "<key>": part stays put; only null is replaced, by "<value>". */
+    prefix_len = search_len - 4;
+    value_len = strlen(value);
     tail_len = strlen(pos + search_len);
-    
-    /* Move tail to make room (or shrink) */
-    memmove(pos + replace_len, pos + search_len, tail_len + 1);
-    /* Copy replacement */
-    memcpy(pos, replace, replace_len);
+
+    /* prefix + opening quote + value + closing quote + tail + terminator.
+       Refuse rather than truncate: a clipped value would leave the string
+       unterminated and so invalidate the whole document, not just this key. */
+    new_total = (size_t)(pos - json) + prefix_len + 1 + value_len + 1 + tail_len + 1;
+    if (new_total > json_capacity) return;
+
+    /* Shift the tail clear, then write the quoted value over the null. */
+    memmove(pos + prefix_len + 1 + value_len + 1, pos + search_len, tail_len + 1);
+    pos[prefix_len] = '"';
+    memcpy(pos + prefix_len + 1, value, value_len);
+    pos[prefix_len + 1 + value_len] = '"';
 }
 
 /*
@@ -1172,15 +1179,15 @@ int ws_build_sensor_json_base(char *output, size_t output_len,
     output[output_len - 1] = '\0';
 
     /* Replace common fields */
-    ws_json_replace_null_string(output, "sensor", sensor);
-    ws_json_replace_null_string(output, "measures", measures);
-    ws_json_replace_null_string(output, "unit", unit);
-    ws_json_replace_null_string(output, "sensor_id", sensor_id);
+    ws_json_replace_null_string(output, output_len, "sensor", sensor);
+    ws_json_replace_null_string(output, output_len, "measures", measures);
+    ws_json_replace_null_string(output, output_len, "unit", unit);
+    ws_json_replace_null_string(output, output_len, "sensor_id", sensor_id);
 
     /* Physical device model, for the STA Sensor entity. Optional: a driver
        that cannot name its device leaves the field null. */
     if (device && device[0] != '\0') {
-        ws_json_replace_null_string(output, "device", device);
+        ws_json_replace_null_string(output, output_len, "device", device);
     }
 
     /* Location is a token string or a GeoJSON object, so it goes in raw.
@@ -1195,7 +1202,7 @@ int ws_build_sensor_json_base(char *output, size_t output_len,
     
     /* Only set sensor_name if provided */
     if (sensor_name && sensor_name[0] != '\0') {
-        ws_json_replace_null_string(output, "sensor_name", sensor_name);
+        ws_json_replace_null_string(output, output_len, "sensor_name", sensor_name);
     }
     
     ws_json_replace_null_bool(output, "internal", internal);
@@ -1236,7 +1243,8 @@ void ws_sensor_json_set_value(char *json, double value, int precision) {
 /*
  * Add error field to sensor JSON and set value to null.
  */
-void ws_sensor_json_set_error(char *json, const char *error_msg) {
+void ws_sensor_json_set_error(char *json, size_t json_capacity,
+                              const char *error_msg) {
     char escaped[256];
     
     if (!json) return;
@@ -1245,7 +1253,21 @@ void ws_sensor_json_set_error(char *json, const char *error_msg) {
     /* Replace error:null with error:"message" */
     if (error_msg) {
         ws_json_escape_string(error_msg, escaped, sizeof(escaped));
-        ws_json_replace_null_string(json, "error", escaped);
+        ws_json_replace_null_string(json, json_capacity, "error", escaped);
+    }
+}
+
+/*
+ * Set a reading's outcome: a value or an error, never both.
+ */
+void ws_sensor_json_set_result(char *json, size_t json_capacity, double value,
+                               int precision, const char *error_msg) {
+    if (!json) return;
+
+    if (error_msg && error_msg[0] != '\0') {
+        ws_sensor_json_set_error(json, json_capacity, error_msg);
+    } else {
+        ws_sensor_json_set_value(json, value, precision);
     }
 }
 

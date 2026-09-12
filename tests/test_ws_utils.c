@@ -791,6 +791,96 @@ void test_read_file_not_found(void) {
     TEST_ASSERT_NULL(content);
 }
 
+/* ========== Bounded string replacement Tests ========== */
+
+void test_replace_null_string_inserts_value(void) {
+    char json[64] = "{\"sensor_name\":null}";
+    ws_json_replace_null_string(json, sizeof(json), "sensor_name", "Pond probe");
+    TEST_ASSERT_EQUAL_STRING("{\"sensor_name\":\"Pond probe\"}", json);
+}
+
+/* A value that does not fit must be refused, not clipped: a clipped value
+   leaves the string unterminated and invalidates the whole document. */
+void test_replace_null_string_refuses_when_too_long(void) {
+    char json[32] = "{\"sensor_name\":null}";
+    char before[32];
+    strcpy(before, json);
+    ws_json_replace_null_string(json, sizeof(json),
+                                "sensor_name", "far too long to ever fit in here");
+    TEST_ASSERT_EQUAL_STRING(before, json);
+}
+
+/* The longest value that exactly fills the buffer must still be written. */
+void test_replace_null_string_exact_fit_accepted(void) {
+    /* {"k":null} and {"k":"VV"} are both 10 chars, +1 for the terminator. */
+    char json[11] = "{\"k\":null}";
+    ws_json_replace_null_string(json, sizeof(json), "k", "VV");
+    TEST_ASSERT_EQUAL_STRING("{\"k\":\"VV\"}", json);
+}
+
+void test_replace_null_string_one_over_is_refused(void) {
+    char json[11] = "{\"k\":null}";
+    ws_json_replace_null_string(json, sizeof(json), "k", "VVV");
+    TEST_ASSERT_EQUAL_STRING("{\"k\":null}", json);
+}
+
+void test_replace_null_string_absent_key_is_noop(void) {
+    char json[64] = "{\"sensor_name\":null}";
+    ws_json_replace_null_string(json, sizeof(json), "missing", "x");
+    TEST_ASSERT_EQUAL_STRING("{\"sensor_name\":null}", json);
+}
+
+/* A long error message must not be able to corrupt the reading either. */
+void test_set_error_refuses_oversized_message(void) {
+    char json[48] = "{\"value\":null,\"error\":null}";
+    ws_sensor_json_set_error(json, sizeof(json),
+                             "a considerably longer error message than will fit");
+    TEST_ASSERT_EQUAL_STRING("{\"value\":null,\"error\":null}", json);
+}
+
+/* ========== Reading outcome (value XOR error) Tests ========== */
+
+/* A reading's JSON after ws_build_sensor_json_base(), value and error still null. */
+#define READING_TEMPLATE "{\"value\":null,\"internal\":false,\"error\":null}"
+
+void test_set_result_success_sets_value_only(void) {
+    char json[256] = READING_TEMPLATE;
+    ws_sensor_json_set_result(json, sizeof(json), 21.375, 3, NULL);
+    TEST_ASSERT_EQUAL_STRING("{\"value\":21.375,\"internal\":false,\"error\":null}", json);
+}
+
+void test_set_result_error_leaves_value_null(void) {
+    char json[256] = READING_TEMPLATE;
+    /* The w1therm case: a sentinel temperature must not reach "value". */
+    ws_sensor_json_set_result(json, sizeof(json), 85.0, 3, "Sensor has startup value (85.000 C)");
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"value\":null"));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"error\":\"Sensor has startup value (85.000 C)\""));
+    TEST_ASSERT_NULL(strstr(json, "85.000,"));
+}
+
+void test_set_result_empty_error_counts_as_success(void) {
+    char json[256] = READING_TEMPLATE;
+    ws_sensor_json_set_result(json, sizeof(json), 1.5, 1, "");
+    TEST_ASSERT_EQUAL_STRING("{\"value\":1.5,\"internal\":false,\"error\":null}", json);
+}
+
+void test_set_result_escapes_error(void) {
+    char json[256] = READING_TEMPLATE;
+    ws_sensor_json_set_result(json, sizeof(json), 0.0, 1, "bad \"quoted\" value");
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"error\":\"bad \\\"quoted\\\" value\""));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"value\":null"));
+}
+
+void test_set_result_null_json_is_noop(void) {
+    char json[256] = READING_TEMPLATE;
+    /* Must not dereference a NULL buffer on either branch. */
+    ws_sensor_json_set_result(NULL, 256, 1.0, 1, NULL);
+    ws_sensor_json_set_result(NULL, 256, 1.0, 1, "boom");
+    /* Reaching here without crashing is the assertion; confirm it still works. */
+    ws_sensor_json_set_result(json, sizeof(json), 2.5, 1, NULL);
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"value\":2.5"));
+}
+
 /* ========== JSON null-replacement Tests ========== */
 
 /* The real sc-prototype template ships "internal" as false, not null. */
@@ -1112,6 +1202,21 @@ int main(void) {
     RUN_TEST(test_read_file_with_size);
     RUN_TEST(test_read_file_not_found);
     
+    /* Bounded string replacement tests */
+    RUN_TEST(test_replace_null_string_inserts_value);
+    RUN_TEST(test_replace_null_string_refuses_when_too_long);
+    RUN_TEST(test_replace_null_string_exact_fit_accepted);
+    RUN_TEST(test_replace_null_string_one_over_is_refused);
+    RUN_TEST(test_replace_null_string_absent_key_is_noop);
+    RUN_TEST(test_set_error_refuses_oversized_message);
+
+    /* Reading outcome tests */
+    RUN_TEST(test_set_result_success_sets_value_only);
+    RUN_TEST(test_set_result_error_leaves_value_null);
+    RUN_TEST(test_set_result_empty_error_counts_as_success);
+    RUN_TEST(test_set_result_escapes_error);
+    RUN_TEST(test_set_result_null_json_is_noop);
+
     /* JSON null-replacement tests */
     RUN_TEST(test_replace_null_bool_from_null);
     RUN_TEST(test_replace_null_bool_over_prototype_false);
