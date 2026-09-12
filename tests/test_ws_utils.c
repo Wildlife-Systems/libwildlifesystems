@@ -1181,7 +1181,7 @@ static size_t count_occurrences(const char *haystack, const char *needle) {
    drivers rather than from here. */
 void test_cmd_mock_rejects_no_readings(void) {
     static const ws_mock_reading_t one[] = {
-        { "s", "temperature", NULL, WS_UNIT_CELSIUS, 1.0, 1 },
+        { "s", "temperature", NULL, WS_UNIT_CELSIUS, 1.0, 1, NULL },
     };
     TEST_ASSERT_EQUAL_INT(WS_EXIT_INVALID_ARG,
         ws_cmd_mock("dev", "dev_mock", "Mock", NULL, 1));
@@ -1420,6 +1420,95 @@ void test_config_iter_free_fields_nulls_pointers(void) {
     TEST_ASSERT_NULL(base.sensor_name);
     /* Idempotent, so a double free_config cannot corrupt the heap. */
     ws_sensor_config_free_fields(&base);
+}
+
+/* ========== Fallback sensor_id Tests ========== */
+
+/* A driver's config struct: the base first, then its own field. */
+typedef struct {
+    ws_sensor_config_base_t base;
+    int pin;
+} fallback_entry_t;
+
+static void fallback_pin(const void *entry, char *buf, size_t cap) {
+    snprintf(buf, cap, "pin%d", ((const fallback_entry_t *)entry)->pin);
+}
+
+/* Point the serial lookup at a file that carries the given serial line. */
+static void use_serial(const char *cpuinfo) {
+    write_file(cpuinfo);
+    setenv("WS_CPUINFO_FILE", temp_file_path, 1);
+}
+
+static void free_entries(fallback_entry_t *e, int n) {
+    int i;
+    for (i = 0; i < n; i++) ws_sensor_config_free_fields(&e[i].base);
+    unsetenv("WS_CPUINFO_FILE");
+}
+
+/* One entry without an id keeps the id the default config has always
+   produced, so an existing node's datastreams do not move. */
+void test_fallback_id_single_entry_keeps_plain_id(void) {
+    fallback_entry_t e[1] = {{ {0}, 4 }};
+    use_serial("Serial\t\t: abc123\n");
+    TEST_ASSERT_EQUAL_INT(1, ws_config_assign_fallback_ids(e, sizeof(e[0]), 1, "dht11", fallback_pin));
+    TEST_ASSERT_EQUAL_STRING("abc123_dht11", e[0].base.sensor_id);
+    free_entries(e, 1);
+}
+
+/* Two entries without ids used to get the same one and be merged downstream
+   without a word. They are now told apart by the hardware they are read from;
+   an entry that has an id is left alone. */
+void test_fallback_id_several_entries_add_hardware(void) {
+    fallback_entry_t e[3] = {{ {0}, 4 }, { {0}, 17 }, { {0}, 22 }};
+    e[2].base.sensor_id = strdup("greenhouse");
+    use_serial("Serial\t\t: abc123\n");
+    TEST_ASSERT_EQUAL_INT(2, ws_config_assign_fallback_ids(e, sizeof(e[0]), 3, "dht11", fallback_pin));
+    TEST_ASSERT_EQUAL_STRING("abc123_dht11_pin4",  e[0].base.sensor_id);
+    TEST_ASSERT_EQUAL_STRING("abc123_dht11_pin17", e[1].base.sensor_id);
+    TEST_ASSERT_EQUAL_STRING("greenhouse",         e[2].base.sensor_id);
+    free_entries(e, 3);
+}
+
+void test_fallback_id_nothing_missing_is_untouched(void) {
+    fallback_entry_t e[2] = {{ {0}, 4 }, { {0}, 17 }};
+    e[0].base.sensor_id = strdup("a");
+    e[1].base.sensor_id = strdup("b");
+    use_serial("Serial\t\t: abc123\n");
+    TEST_ASSERT_EQUAL_INT(0, ws_config_assign_fallback_ids(e, sizeof(e[0]), 2, "dht11", fallback_pin));
+    TEST_ASSERT_EQUAL_STRING("a", e[0].base.sensor_id);
+    TEST_ASSERT_EQUAL_STRING("b", e[1].base.sensor_id);
+    free_entries(e, 2);
+}
+
+/* No serial, no id: unknown is recorded as unknown, never fabricated. */
+void test_fallback_id_without_serial_stays_null(void) {
+    fallback_entry_t e[2] = {{ {0}, 4 }, { {0}, 17 }};
+    use_serial("processor\t: 0\n");
+    TEST_ASSERT_EQUAL_INT(0, ws_config_assign_fallback_ids(e, sizeof(e[0]), 2, "dht11", fallback_pin));
+    TEST_ASSERT_NULL(e[0].base.sensor_id);
+    TEST_ASSERT_NULL(e[1].base.sensor_id);
+    free_entries(e, 2);
+}
+
+/* Without a hardware callback the plain id is used even for several entries,
+   and the collision is the caller's to hear about. */
+void test_fallback_id_no_hardware_callback(void) {
+    fallback_entry_t e[2] = {{ {0}, 4 }, { {0}, 17 }};
+    use_serial("Serial\t\t: abc123\n");
+    TEST_ASSERT_EQUAL_INT(2, ws_config_assign_fallback_ids(e, sizeof(e[0]), 2, "dht11", NULL));
+    TEST_ASSERT_EQUAL_STRING("abc123_dht11", e[0].base.sensor_id);
+    TEST_ASSERT_EQUAL_STRING("abc123_dht11", e[1].base.sensor_id);
+    free_entries(e, 2);
+}
+
+void test_fallback_id_bad_arguments(void) {
+    fallback_entry_t e[1] = {{ {0}, 4 }};
+    TEST_ASSERT_EQUAL_INT(-1, ws_config_assign_fallback_ids(NULL, sizeof(e[0]), 1, "dht11", fallback_pin));
+    TEST_ASSERT_EQUAL_INT(-1, ws_config_assign_fallback_ids(e, 1, 1, "dht11", fallback_pin));
+    TEST_ASSERT_EQUAL_INT(-1, ws_config_assign_fallback_ids(e, sizeof(e[0]), 1, NULL, fallback_pin));
+    TEST_ASSERT_EQUAL_INT(0, ws_config_assign_fallback_ids(e, sizeof(e[0]), 0, "dht11", fallback_pin));
+    TEST_ASSERT_NULL(e[0].base.sensor_id);
 }
 
 /* ========== Bounded string replacement Tests ========== */
@@ -2064,6 +2153,12 @@ int main(void) {
     RUN_TEST(test_config_iter_counts_and_yields_entries);
     RUN_TEST(test_config_iter_handles_nested_location);
     RUN_TEST(test_config_iter_free_fields_nulls_pointers);
+    RUN_TEST(test_fallback_id_single_entry_keeps_plain_id);
+    RUN_TEST(test_fallback_id_several_entries_add_hardware);
+    RUN_TEST(test_fallback_id_nothing_missing_is_untouched);
+    RUN_TEST(test_fallback_id_without_serial_stays_null);
+    RUN_TEST(test_fallback_id_no_hardware_callback);
+    RUN_TEST(test_fallback_id_bad_arguments);
 
     /* Bounded string replacement tests */
     RUN_TEST(test_replace_null_string_inserts_value);

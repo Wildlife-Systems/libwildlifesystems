@@ -1329,6 +1329,79 @@ void ws_config_iter_close(ws_config_iter_t *it) {
 }
 
 /*
+ * Give every entry without a sensor_id a fallback built from the node serial.
+ */
+int ws_config_assign_fallback_ids(void *entries, size_t stride, int count,
+                                  const char *driver,
+                                  void (*hardware)(const void *entry,
+                                                   char *buf, size_t cap)) {
+    char *serial;
+    int missing = 0;
+    int assigned = 0;
+    int i, j;
+
+    if (!entries || stride < sizeof(ws_sensor_config_base_t) || !driver) return -1;
+    if (count <= 0) return 0;
+
+#define WS_ENTRY(n) ((ws_sensor_config_base_t *)((char *)entries + (size_t)(n) * stride))
+
+    for (i = 0; i < count; i++) {
+        if (!WS_ENTRY(i)->sensor_id) missing++;
+    }
+    if (missing > 0) {
+        /* No serial: the ids stay NULL, which a reading reports as null. An
+           unknown id is recorded as unknown, not fabricated. */
+        serial = ws_get_serial_number();
+        if (!serial) return 0;
+
+        for (i = 0; i < count; i++) {
+            ws_sensor_config_base_t *base = WS_ENTRY(i);
+            char hw[64] = "";
+            size_t len;
+
+            if (base->sensor_id) continue;
+
+            /* One entry keeps the id the default config has always produced.
+               More than one would all get it, so each adds what tells them
+               apart: the hardware the driver reads it from. */
+            if (missing > 1 && hardware) {
+                hardware(base, hw, sizeof(hw));
+            }
+
+            len = strlen(serial) + 1 + strlen(driver) + 1 + strlen(hw) + 1;
+            base->sensor_id = malloc(len);
+            if (!base->sensor_id) {
+                free(serial);
+                return -1;
+            }
+            if (hw[0]) {
+                snprintf(base->sensor_id, len, "%s_%s_%s", serial, driver, hw);
+            } else {
+                snprintf(base->sensor_id, len, "%s_%s", serial, driver);
+            }
+            assigned++;
+        }
+        free(serial);
+    }
+
+    /* Two entries with one id, however it came about, will be merged
+       downstream into a single series and nothing there will say so. */
+    for (i = 0; i < count; i++) {
+        for (j = i + 1; j < count; j++) {
+            const char *a = WS_ENTRY(i)->sensor_id;
+            const char *b = WS_ENTRY(j)->sensor_id;
+            if (a && b && strcmp(a, b) == 0) {
+                ws_log_warning("Config entries %d and %d share sensor_id \"%s\"; "
+                               "their readings cannot be told apart downstream",
+                               i + 1, j + 1, a);
+            }
+        }
+    }
+#undef WS_ENTRY
+    return assigned;
+}
+
+/*
  * Get serial number with suffix appended.
  */
 char *ws_get_serial_with_suffix(const char *suffix) {

@@ -1,5 +1,12 @@
 libwildlifesystems (1.3.0) stable; urgency=medium
 
+  * Add ws_config_assign_fallback_ids(). A config entry without a sensor_id
+    used to get "<serial>_<driver>" from each driver's own code, so two such
+    entries got the same id and downstream merged them into one series
+    without a word. One entry still gets that id, so no existing node's
+    datastreams move; two or more are told apart by the hardware they are
+    read from, "<serial>_dht11_pin17", and any two entries that still share
+    an id are warned about
   * ws_mock_reading_t gains a location token, so a driver's mock readings
     declare a location as sensor-onboard's already did and a mock has the
     same shape as a real read; the C drivers' mocks emitted location null.

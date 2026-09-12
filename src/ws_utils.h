@@ -712,6 +712,37 @@ bool ws_config_iter_next(ws_config_iter_t *it, ws_sensor_config_base_t *base,
  */
 void ws_config_iter_close(ws_config_iter_t *it);
 
+/*
+ * Give every entry without a sensor_id a fallback built from the node serial.
+ *
+ * One such entry gets "<serial>_<driver>", which is what the default config
+ * has always produced, so an existing node's ids do not change. Two or more
+ * would all get that same id, and downstream would merge them into one
+ * series without a word from anyone; so where more than one entry lacks an
+ * id, each gets "<serial>_<driver>_<hardware>", the hardware part supplied by
+ * the driver: a GPIO pin, an I2C address. Entries that have a sensor_id are
+ * left alone. Without a node serial nothing is assigned and the ids stay
+ * NULL, which a reading reports as null: unknown, not fabricated.
+ *
+ * Any two entries that end up sharing an id, assigned or configured, are
+ * warned about, since nothing downstream will.
+ *
+ * @param entries   Array of the driver's config structs, each beginning with
+ *                  a ws_sensor_config_base_t
+ * @param stride    sizeof one entry
+ * @param count     Entries in the array
+ * @param driver    Driver name, e.g. "dht11"
+ * @param hardware  Writes an entry's hardware designation, e.g. "pin17",
+ *                  into buf; may be NULL, in which case no designation is
+ *                  added and colliding entries are only warned about
+ * @return          Number of ids assigned, or -1 on bad arguments or out of
+ *                  memory
+ */
+int ws_config_assign_fallback_ids(void *entries, size_t stride, int count,
+                                  const char *driver,
+                                  void (*hardware)(const void *entry,
+                                                   char *buf, size_t cap));
+
 /* ============================================================================
  * Raspberry Pi boot configuration
  * ============================================================================
