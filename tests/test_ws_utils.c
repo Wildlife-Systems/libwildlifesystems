@@ -40,6 +40,57 @@ static void write_file(const char *content) {
     }
 }
 
+/* A stand-in sc-prototype, so the reading builder can be tested without the
+   sensor-control package installed. The template is the real one, copied from
+   sensor-control/usr/bin/sc-prototype; the library caches it on first use, so
+   whichever test asks first installs it for the rest of the run. */
+#define FAKE_PROTOTYPE \
+    "{\"sensor\":null,\"device\":null,\"measures\":null,\"value\":null," \
+    "\"unit\":null,\"node_id\":null,\"sensor_id\":null,\"sensor_name\":null," \
+    "\"location\":null,\"deployment_id\":null,\"timestamp\":null," \
+    "\"config\":null,\"internal\":false,\"error\":null}"
+
+static char fake_bin_dir[256];
+static bool fake_prototype_installed = false;
+
+static void make_fake_bin_dir(void) {
+    if (fake_bin_dir[0]) return;
+    snprintf(fake_bin_dir, sizeof(fake_bin_dir), "/tmp/ws_utils_test_bin_%d",
+             getpid());
+    mkdir(fake_bin_dir, 0700);
+}
+
+static void install_fake_prototype(void) {
+    char script[320];
+    char path[1024];
+    const char *old_path;
+    FILE *fp;
+
+    if (fake_prototype_installed) return;
+    make_fake_bin_dir();
+
+    snprintf(script, sizeof(script), "%s/sc-prototype", fake_bin_dir);
+    fp = fopen(script, "w");
+    if (fp) {
+        fprintf(fp, "#!/bin/sh\nprintf '%%s\\n' '%s'\n", FAKE_PROTOTYPE);
+        fclose(fp);
+        chmod(script, 0755);
+    }
+
+    old_path = getenv("PATH");
+    snprintf(path, sizeof(path), "%s:%s", fake_bin_dir, old_path ? old_path : "");
+    setenv("PATH", path, 1);
+    fake_prototype_installed = true;
+}
+
+static void remove_fake_prototype(void) {
+    char script[320];
+    if (!fake_bin_dir[0]) return;
+    snprintf(script, sizeof(script), "%s/sc-prototype", fake_bin_dir);
+    unlink(script);
+    rmdir(fake_bin_dir);
+}
+
 /* ========== JSON Escape Tests ========== */
 
 void test_json_escape_simple_string(void) {
@@ -1291,6 +1342,119 @@ void test_set_error_refuses_oversized_message(void) {
     TEST_ASSERT_EQUAL_STRING("{\"value\":null,\"error\":null}", json);
 }
 
+/* The message used to pass through a 256-byte buffer on its way to being
+   escaped, which silently cut anything longer. ws-emit takes --error from a
+   command line of any length, so a long message must arrive whole. */
+void test_set_error_long_message_arrives_whole(void) {
+    char msg[400];
+    char json[1024] = "{\"value\":null,\"error\":null}";
+    char *end;
+    size_t i;
+
+    for (i = 0; i < sizeof(msg) - 1; i++) msg[i] = 'a' + (char)(i % 26);
+    msg[sizeof(msg) - 1] = '\0';
+    msg[300] = '"';   /* and an escape well past the old limit */
+
+    ws_sensor_json_set_error(json, sizeof(json), msg);
+
+    TEST_ASSERT_EQUAL_INT(0, strncmp("{\"value\":null,\"error\":\"", json, 23));
+    end = strstr(json, "\"}");
+    TEST_ASSERT_NOT_NULL(end);
+    /* 399 characters plus one backslash for the quote */
+    TEST_ASSERT_EQUAL_INT(400, (int)(end - (json + 23)));
+    TEST_ASSERT_EQUAL_INT(0, strncmp("\\\"", json + 23 + 300, 2));
+}
+
+void test_set_error_null_message_is_noop(void) {
+    char json[64] = "{\"value\":null,\"error\":null}";
+    ws_sensor_json_set_error(json, sizeof(json), NULL);
+    TEST_ASSERT_EQUAL_STRING("{\"value\":null,\"error\":null}", json);
+}
+
+/* ========== Reading builder Tests ========== */
+
+/* With no sc-prototype on the PATH the template cannot be had, and a driver
+   must be told so before it reads anything. Runs before any test installs the
+   stand-in, since a failed lookup is not cached but a successful one is. */
+void test_require_prototype_fails_without_sc_prototype(void) {
+    const char *old_path = getenv("PATH");
+    char saved[1024];
+
+    snprintf(saved, sizeof(saved), "%s", old_path ? old_path : "");
+    make_fake_bin_dir();          /* exists, but holds no sc-prototype yet */
+    setenv("PATH", fake_bin_dir, 1);
+
+    TEST_ASSERT_EQUAL_INT(WS_EXIT_INVALID_ARG, ws_require_prototype());
+
+    setenv("PATH", saved, 1);
+}
+
+void test_require_prototype_succeeds_when_available(void) {
+    install_fake_prototype();
+    TEST_ASSERT_EQUAL_INT(0, ws_require_prototype());
+}
+
+static int build_reading(char *json, size_t cap, const char *sensor_id,
+                         const char *sensor_name) {
+    install_fake_prototype();
+    return ws_build_sensor_json_base(json, cap, "dht11_temperature", "dht11",
+                                     "temperature", WS_UNIT_CELSIUS,
+                                     sensor_id, sensor_name, true, NULL,
+                                     1700000000);
+}
+
+void test_build_reading_fills_common_fields(void) {
+    char json[1024];
+    TEST_ASSERT_EQUAL_INT(0, build_reading(json, sizeof(json), "abc_dht11", "Shed"));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"sensor\":\"dht11_temperature\""));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"device\":\"dht11\""));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"measures\":\"temperature\""));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"unit\":\"Celsius\""));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"sensor_id\":\"abc_dht11\""));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"sensor_name\":\"Shed\""));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"internal\":true"));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"timestamp\":1700000000"));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"value\":null"));
+}
+
+/* A sensor_id or sensor_name comes from a config file someone typed. A quote
+   or backslash in it must not end the string early: one bad name would
+   invalidate the whole document, and sr then drops every reading from that
+   driver. Escaping is the library's job, so no caller can forget it or do it
+   twice. */
+void test_build_reading_escapes_sensor_id(void) {
+    char json[1024];
+    TEST_ASSERT_EQUAL_INT(0, build_reading(json, sizeof(json), "ab\"c\\d", NULL));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"sensor_id\":\"ab\\\"c\\\\d\""));
+}
+
+void test_build_reading_escapes_sensor_name(void) {
+    char json[1024];
+    TEST_ASSERT_EQUAL_INT(0, build_reading(json, sizeof(json), "id",
+                                           "Ed's \"garden\" probe"));
+    TEST_ASSERT_NOT_NULL(strstr(json,
+        "\"sensor_name\":\"Ed's \\\"garden\\\" probe\""));
+}
+
+/* An escaped value that would not fit is refused whole, never clipped. */
+void test_build_reading_refuses_oversized_escaped_value(void) {
+    char json[1024];
+    char name[600];
+    memset(name, '"', sizeof(name) - 1);   /* escapes to twice the length */
+    name[sizeof(name) - 1] = '\0';
+    TEST_ASSERT_EQUAL_INT(0, build_reading(json, sizeof(json), "id", name));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"sensor_name\":null"));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"sensor_id\":\"id\""));
+}
+
+/* NULL means unknown, and unknown is recorded as null, not fabricated. */
+void test_build_reading_null_strings_stay_null(void) {
+    char json[1024];
+    TEST_ASSERT_EQUAL_INT(0, build_reading(json, sizeof(json), NULL, NULL));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"sensor_id\":null"));
+    TEST_ASSERT_NOT_NULL(strstr(json, "\"sensor_name\":null"));
+}
+
 /* ========== Reading outcome (value XOR error) Tests ========== */
 
 /* A reading's JSON after ws_build_sensor_json_base(), value and error still null. */
@@ -1531,6 +1695,20 @@ void test_json_array_free_is_idempotent(void) {
     TEST_ASSERT_NULL(builder.buffer);
 }
 
+/* An empty item is a reading whose builder failed and cleared its buffer.
+   Two drivers used to append it regardless and print "[,]" with exit 0; the
+   array now fails as a whole, so nothing that is not JSON reaches stdout. */
+void test_json_array_empty_item_fails_the_array(void) {
+    ws_json_array_builder_t builder;
+    TEST_ASSERT_EQUAL_INT(0, ws_json_array_init(&builder));
+    ws_json_array_add(&builder, "1");
+    ws_json_array_add(&builder, "");
+    ws_json_array_add(&builder, "2");
+    ws_json_array_end(&builder);
+    TEST_ASSERT_NULL(ws_json_array_get(&builder));
+    ws_json_array_free(&builder);
+}
+
 /* ========== Config Builder Tests ========== */
 
 void test_config_base_with_version(void) {
@@ -1747,6 +1925,18 @@ int main(void) {
     RUN_TEST(test_replace_null_string_one_over_is_refused);
     RUN_TEST(test_replace_null_string_absent_key_is_noop);
     RUN_TEST(test_set_error_refuses_oversized_message);
+    RUN_TEST(test_set_error_long_message_arrives_whole);
+    RUN_TEST(test_set_error_null_message_is_noop);
+
+    /* Reading builder tests. The "fails without" case must run before any
+       test installs the stand-in sc-prototype, which is then cached. */
+    RUN_TEST(test_require_prototype_fails_without_sc_prototype);
+    RUN_TEST(test_require_prototype_succeeds_when_available);
+    RUN_TEST(test_build_reading_fills_common_fields);
+    RUN_TEST(test_build_reading_escapes_sensor_id);
+    RUN_TEST(test_build_reading_escapes_sensor_name);
+    RUN_TEST(test_build_reading_refuses_oversized_escaped_value);
+    RUN_TEST(test_build_reading_null_strings_stay_null);
 
     /* Reading outcome tests */
     RUN_TEST(test_set_result_success_sets_value_only);
@@ -1781,13 +1971,15 @@ int main(void) {
     RUN_TEST(test_json_array_multiple_items);
     RUN_TEST(test_json_array_grows_past_initial_capacity);
     RUN_TEST(test_json_array_free_is_idempotent);
-    
+    RUN_TEST(test_json_array_empty_item_fails_the_array);
+
     /* Config Builder tests */
     RUN_TEST(test_config_base_with_version);
     RUN_TEST(test_config_add_string);
     RUN_TEST(test_config_add_int);
     RUN_TEST(test_config_add_object);
     RUN_TEST(test_config_multiple_fields);
-    
+
+    remove_fake_prototype();
     return UNITY_END();
 }

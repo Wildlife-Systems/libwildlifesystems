@@ -196,6 +196,22 @@ char *ws_get_sc_prototype(void);
 const char *ws_get_prototype_cached(void);
 
 /*
+ * Confirm the sc-prototype template is available, before any reading is taken.
+ *
+ * Every reading needs the template, so a driver should ask once, up front,
+ * and fail with nothing printed if it is missing. Finding out per reading is
+ * too late: the hardware has been read, and an array is half built. Two
+ * drivers used to emit "[,]" in that state, with exit 0.
+ *
+ * Nothing on stdout means "this driver could not report", where "[]" would
+ * mean "this node has no sensors"; the two must not be confused.
+ *
+ * @return  0 if the template is available; otherwise logs the failure and
+ *          returns WS_EXIT_INVALID_ARG, so a driver can return it directly
+ */
+int ws_require_prototype(void);
+
+/*
  * Get current Unix timestamp.
  *
  * @return         Current time as Unix timestamp
@@ -875,6 +891,11 @@ int ws_json_array_init(ws_json_array_builder_t *builder);
  * reported here, so a caller may add freely and check once at the end: the
  * builder then yields NULL from ws_json_array_get().
  *
+ * An empty item is treated the same way. No JSON value is empty, so one can
+ * only be a reading whose builder failed and cleared its buffer; appending it
+ * would produce "[,]", which is not JSON at all. The array fails as a whole
+ * rather than pass that off as output.
+ *
  * @param builder   Builder context
  * @param item      A complete JSON value
  */
@@ -920,8 +941,15 @@ void ws_format_timestamp(char *buffer, size_t bufsize, time_t timestamp);
 
 /*
  * Build base sensor JSON from sc-prototype template.
- * Populates common fields: sensor, measures, unit, sensor_id, sensor_name, internal, timestamp.
+ * Populates common fields: sensor, device, measures, unit, sensor_id,
+ * sensor_name, location, internal, timestamp.
  * Returns the modified JSON in output buffer for sensor-specific additions.
+ *
+ * Every string is escaped here. Pass them as they are, unescaped: a
+ * sensor_id or sensor_name comes from a config file someone typed, and a quote
+ * in it must not be able to end the string early and invalidate the document.
+ * Escaping at the call site instead had been done by one driver, for one
+ * field, and would now double-escape.
  *
  * @param output        Output buffer for JSON
  * @param output_len    Size of output buffer
@@ -932,13 +960,14 @@ void ws_format_timestamp(char *buffer, size_t bufsize, time_t timestamp);
  *                      measurand; this is what identifies the STA Sensor.
  * @param measures      What is measured (e.g., "temperature", "humidity")
  * @param unit          Unit of measurement (e.g., "Celsius", "percentage")
- * @param sensor_id     Unique sensor identifier
+ * @param sensor_id     Unique sensor identifier, or NULL to leave null
  * @param sensor_name   Human-readable name (can be NULL)
  * @param internal      true if internal sensor
  * @param location      Where the sensor is, from its config; NULL or
  *                      WS_LOC_UNDECLARED leaves the field null
  * @param timestamp     Unix timestamp of reading
- * @return              0 on success, -1 on error (prototype not available)
+ * @return              0 on success, -1 on error (prototype not available, or
+ *                      out of memory); output is then an empty string
  */
 int ws_build_sensor_json_base(char *output, size_t output_len,
                                const char *sensor, const char *device,
@@ -963,6 +992,9 @@ void ws_sensor_json_set_value(char *json, double value, int precision);
  *
  * Where the reading may or may not have failed, prefer
  * ws_sensor_json_set_result(), which cannot emit a value alongside the error.
+ *
+ * The message is escaped in full, however long. A message that then does not
+ * fit the buffer is refused whole rather than clipped, as for any string.
  *
  * @param json          JSON buffer to modify
  * @param json_capacity Size of the buffer

@@ -309,6 +309,16 @@ const char *ws_get_prototype_cached(void) {
 }
 
 /*
+ * Confirm the sc-prototype template is available, logging if not.
+ */
+int ws_require_prototype(void) {
+    if (ws_get_prototype_cached()) return 0;
+
+    ws_log_error("sc-prototype failed - cannot generate JSON");
+    return WS_EXIT_INVALID_ARG;
+}
+
+/*
  * Get current Unix timestamp.
  */
 time_t ws_get_timestamp(void) {
@@ -401,8 +411,7 @@ int ws_cmd_mock(const char *device, const char *serial_suffix,
 
     /* Check the template before printing anything, so a failure leaves no
        half-written array, and do not pass an empty array off as a good read. */
-    if (!ws_get_prototype_cached()) {
-        ws_log_error("sc-prototype failed - cannot generate JSON");
+    if (ws_require_prototype() != 0) {
         return WS_EXIT_INVALID_ARG;
     }
 
@@ -1538,6 +1547,13 @@ int ws_json_array_init(ws_json_array_builder_t *builder) {
 void ws_json_array_add(ws_json_array_builder_t *builder, const char *item) {
     if (!builder || !item) return;
 
+    /* An empty item is a reading whose builder failed. Appending it would
+       give "[,]"; failing the array keeps invalid JSON off stdout. */
+    if (!*item) {
+        builder->error = 1;
+        return;
+    }
+
     if (builder->item_count > 0) {
         array_append(builder, ",");
     }
@@ -1587,6 +1603,37 @@ void ws_format_timestamp(char *buffer, size_t bufsize, time_t timestamp) {
 }
 
 /*
+ * Replace "key":null with the escaped form of a caller's string.
+ *
+ * The one place a string from outside the library - a config file, a command
+ * line - enters a reading. Escaping happens here so no caller has to remember
+ * to, and none can do it twice. The escaped copy lives on the heap because
+ * the input is of any length; a fixed buffer would clip it, and a clipped
+ * value is exactly the corruption the escaping exists to prevent.
+ *
+ * A NULL or empty value leaves the field null, as the callers expect.
+ *
+ * @return  0 on success (including nothing to do), -1 if out of memory
+ */
+static int replace_null_escaped(char *json, size_t json_capacity,
+                                const char *key, const char *value) {
+    size_t escaped_len;
+    char *escaped;
+
+    if (!value || !*value) return 0;
+
+    /* Every character may become two, plus the terminator. */
+    escaped_len = strlen(value) * 2 + 1;
+    escaped = malloc(escaped_len);
+    if (!escaped) return -1;
+
+    ws_json_escape_string(value, escaped, escaped_len);
+    ws_json_replace_null_string(json, json_capacity, key, escaped);
+    free(escaped);
+    return 0;
+}
+
+/*
  * Build base sensor JSON from sc-prototype template.
  */
 int ws_build_sensor_json_base(char *output, size_t output_len,
@@ -1609,16 +1656,19 @@ int ws_build_sensor_json_base(char *output, size_t output_len,
     strncpy(output, prototype, output_len - 1);
     output[output_len - 1] = '\0';
 
-    /* Replace common fields */
-    ws_json_replace_null_string(output, output_len, "sensor", sensor);
-    ws_json_replace_null_string(output, output_len, "measures", measures);
-    ws_json_replace_null_string(output, output_len, "unit", unit);
-    ws_json_replace_null_string(output, output_len, "sensor_id", sensor_id);
-
-    /* Physical device model, for the STA Sensor entity. Optional: a driver
-       that cannot name its device leaves the field null. */
-    if (device && device[0] != '\0') {
-        ws_json_replace_null_string(output, output_len, "device", device);
+    /* Replace common fields. Each is escaped on the way in; an allocation
+       failure leaves the reading unbuilt rather than half built, since a
+       missing sensor_id is a different reading from the one asked for.
+       Physical device model is optional: a driver that cannot name its
+       device leaves the field null. */
+    if (replace_null_escaped(output, output_len, "sensor", sensor) != 0 ||
+        replace_null_escaped(output, output_len, "measures", measures) != 0 ||
+        replace_null_escaped(output, output_len, "unit", unit) != 0 ||
+        replace_null_escaped(output, output_len, "sensor_id", sensor_id) != 0 ||
+        replace_null_escaped(output, output_len, "device", device) != 0 ||
+        replace_null_escaped(output, output_len, "sensor_name", sensor_name) != 0) {
+        output[0] = '\0';
+        return -1;
     }
 
     /* Location is a token string or a GeoJSON object, so it goes in raw.
@@ -1630,12 +1680,7 @@ int ws_build_sensor_json_base(char *output, size_t output_len,
             free(location_json);
         }
     }
-    
-    /* Only set sensor_name if provided */
-    if (sensor_name && sensor_name[0] != '\0') {
-        ws_json_replace_null_string(output, output_len, "sensor_name", sensor_name);
-    }
-    
+
     ws_json_replace_null_bool(output, "internal", internal);
     
     /* Add timestamp as integer */
@@ -1676,16 +1721,14 @@ void ws_sensor_json_set_value(char *json, double value, int precision) {
  */
 void ws_sensor_json_set_error(char *json, size_t json_capacity,
                               const char *error_msg) {
-    char escaped[256];
-    
     if (!json) return;
-    
-    /* Value stays as null (or we explicitly set it) */
-    /* Replace error:null with error:"message" */
-    if (error_msg) {
-        ws_json_escape_string(error_msg, escaped, sizeof(escaped));
-        ws_json_replace_null_string(json, json_capacity, "error", escaped);
-    }
+
+    /* Value stays null. The message is escaped in full: it used to pass
+       through a 256-byte buffer, which silently cut a long one and could
+       reach ws-emit's --error from a command line of any length. If the
+       escaped copy cannot be allocated the field stays null, which is
+       still valid JSON. */
+    replace_null_escaped(json, json_capacity, "error", error_msg);
 }
 
 /*

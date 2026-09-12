@@ -242,8 +242,7 @@ int main(int argc, char *argv[]) {
 
     /* Fail before emitting anything, rather than leaving a half-written
        array behind: every reading needs the template, so check it once here. */
-    if (!ws_get_prototype_cached()) {
-        ws_log_error("sc-prototype failed - cannot generate JSON");
+    if (ws_require_prototype() != 0) {
         return WS_EXIT_INVALID_ARG;
     }
 
