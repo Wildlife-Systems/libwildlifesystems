@@ -674,52 +674,67 @@ const char *ws_json_builder_get(ws_json_builder_t *builder);
 /* ============================================================================
  * JSON Array Builder
  * ============================================================================
- * Helper for building JSON arrays with proper comma handling.
+ * Accumulates JSON values into an array, growing as needed, so a driver does
+ * not size a buffer up front for a reading count it cannot know. Each driver
+ * previously open-coded this with realloc and strcat, re-measuring the whole
+ * string per reading.
  */
 
 /*
  * JSON array builder context.
+ * Initialise with ws_json_array_init() and release with ws_json_array_free().
+ * Treat the fields as private.
  */
 typedef struct {
-    char *buffer;           /* Output buffer */
-    size_t capacity;        /* Buffer capacity */
-    size_t length;          /* Current string length */
-    int item_count;         /* Number of items (for comma handling) */
-    int error;              /* Error flag if buffer overflow */
+    char *buffer;           /* Heap buffer, owned by the builder */
+    size_t capacity;        /* Allocated size */
+    size_t length;          /* Current string length, excluding terminator */
+    int item_count;         /* Items added, for comma placement */
+    int error;              /* Set if an allocation failed */
 } ws_json_array_builder_t;
 
 /*
- * Initialize a JSON array builder.
+ * Initialise a JSON array builder, allocating its buffer.
  *
- * @param builder   Builder context to initialize
- * @param buffer    Output buffer to write to
- * @param capacity  Size of output buffer
+ * @param builder   Builder context to initialise
+ * @return          0 on success, -1 if the allocation failed
  */
-void ws_json_array_init(ws_json_array_builder_t *builder, char *buffer, size_t capacity);
+int ws_json_array_init(ws_json_array_builder_t *builder);
 
 /*
- * Add an item to the JSON array.
- * Handles comma placement automatically.
+ * Add an item to the array, growing the buffer as needed.
+ *
+ * Commas are placed for you. A failed allocation is remembered rather than
+ * reported here, so a caller may add freely and check once at the end: the
+ * builder then yields NULL from ws_json_array_get().
  *
  * @param builder   Builder context
- * @param item      JSON string to add (should be a complete JSON value)
+ * @param item      A complete JSON value
  */
 void ws_json_array_add(ws_json_array_builder_t *builder, const char *item);
 
 /*
- * Finalize the JSON array (adds closing ']').
+ * Finalise the array, appending the closing bracket.
  *
  * @param builder   Builder context
  */
 void ws_json_array_end(ws_json_array_builder_t *builder);
 
 /*
- * Get the final JSON array string.
+ * Get the finished array.
  *
  * @param builder   Builder context
- * @return          Pointer to the JSON array string, or NULL on error
+ * @return          The JSON array, or NULL if any allocation failed. Valid
+ *                  until ws_json_array_free().
  */
 const char *ws_json_array_get(ws_json_array_builder_t *builder);
+
+/*
+ * Release the builder's buffer. Safe on a failed init, and safe twice.
+ *
+ * @param builder   Builder context
+ */
+void ws_json_array_free(ws_json_array_builder_t *builder);
 
 /* ============================================================================
  * Sensor JSON Helpers

@@ -1169,40 +1169,75 @@ const char *ws_json_builder_get(ws_json_builder_t *builder) {
  * JSON Array Builder Functions
  * ============================================================================ */
 
+/* Initial room for a couple of readings; grows from there. */
+#define WS_ARRAY_INITIAL_CAPACITY 4096
+
 /*
- * Append to array builder buffer with overflow checking.
+ * Make room for `extra` more characters plus a terminator.
+ */
+static int array_reserve(ws_json_array_builder_t *builder, size_t extra) {
+    size_t needed;
+    size_t capacity;
+    char *grown;
+
+    if (builder->error) return -1;
+
+    needed = builder->length + extra + 1;
+    if (needed <= builder->capacity) return 0;
+
+    capacity = builder->capacity ? builder->capacity : WS_ARRAY_INITIAL_CAPACITY;
+    while (capacity < needed) {
+        capacity *= 2;
+    }
+
+    grown = realloc(builder->buffer, capacity);
+    if (!grown) {
+        builder->error = 1;
+        return -1;
+    }
+    builder->buffer = grown;
+    builder->capacity = capacity;
+    return 0;
+}
+
+/*
+ * Append to the array buffer, growing it as needed.
  */
 static void array_append(ws_json_array_builder_t *builder, const char *str) {
     size_t str_len;
-    
+
     if (!builder || builder->error || !str) return;
-    
+
     str_len = strlen(str);
-    if (builder->length + str_len >= builder->capacity) {
-        builder->error = 1;
-        return;
-    }
-    
+    if (array_reserve(builder, str_len) != 0) return;
+
+    /* length is tracked, so no strlen of the whole array per append. */
     memcpy(builder->buffer + builder->length, str, str_len + 1);
     builder->length += str_len;
 }
 
 /*
- * Initialize a JSON array builder.
+ * Initialise a JSON array builder.
  */
-void ws_json_array_init(ws_json_array_builder_t *builder, char *buffer, size_t capacity) {
-    if (!builder || !buffer || capacity == 0) return;
-    
-    builder->buffer = buffer;
-    builder->capacity = capacity;
-    builder->length = 0;
+int ws_json_array_init(ws_json_array_builder_t *builder) {
+    if (!builder) return -1;
+
+    builder->buffer = malloc(WS_ARRAY_INITIAL_CAPACITY);
+    if (!builder->buffer) {
+        builder->capacity = 0;
+        builder->length = 0;
+        builder->item_count = 0;
+        builder->error = 1;
+        return -1;
+    }
+
+    builder->capacity = WS_ARRAY_INITIAL_CAPACITY;
+    builder->buffer[0] = '[';
+    builder->buffer[1] = '\0';
+    builder->length = 1;
     builder->item_count = 0;
     builder->error = 0;
-    
-    /* Start with opening bracket */
-    buffer[0] = '[';
-    buffer[1] = '\0';
-    builder->length = 1;
+    return 0;
 }
 
 /*
@@ -1210,7 +1245,7 @@ void ws_json_array_init(ws_json_array_builder_t *builder, char *buffer, size_t c
  */
 void ws_json_array_add(ws_json_array_builder_t *builder, const char *item) {
     if (!builder || !item) return;
-    
+
     if (builder->item_count > 0) {
         array_append(builder, ",");
     }
@@ -1219,7 +1254,7 @@ void ws_json_array_add(ws_json_array_builder_t *builder, const char *item) {
 }
 
 /*
- * Finalize the JSON array.
+ * Finalise the JSON array.
  */
 void ws_json_array_end(ws_json_array_builder_t *builder) {
     if (!builder) return;
@@ -1232,6 +1267,19 @@ void ws_json_array_end(ws_json_array_builder_t *builder) {
 const char *ws_json_array_get(ws_json_array_builder_t *builder) {
     if (!builder || builder->error) return NULL;
     return builder->buffer;
+}
+
+/*
+ * Release the builder's buffer.
+ */
+void ws_json_array_free(ws_json_array_builder_t *builder) {
+    if (!builder) return;
+    free(builder->buffer);
+    builder->buffer = NULL;
+    builder->capacity = 0;
+    builder->length = 0;
+    builder->item_count = 0;
+    builder->error = 0;
 }
 
 /* ============================================================================

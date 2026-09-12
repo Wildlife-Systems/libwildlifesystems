@@ -1124,32 +1124,78 @@ void test_validate_gpio_pin_invalid(void) {
 
 /* ========== JSON Array Builder Tests ========== */
 
+/* Counts occurrences of c in s. */
+static size_t count_char(const char *s, char c) {
+    size_t n = 0;
+    while (*s) {
+        if (*s++ == c) n++;
+    }
+    return n;
+}
+
 void test_json_array_empty(void) {
-    char buffer[256];
     ws_json_array_builder_t builder;
-    ws_json_array_init(&builder, buffer, sizeof(buffer));
+    TEST_ASSERT_EQUAL_INT(0, ws_json_array_init(&builder));
     ws_json_array_end(&builder);
     TEST_ASSERT_EQUAL_STRING("[]", ws_json_array_get(&builder));
+    ws_json_array_free(&builder);
 }
 
 void test_json_array_single_item(void) {
-    char buffer[256];
     ws_json_array_builder_t builder;
-    ws_json_array_init(&builder, buffer, sizeof(buffer));
+    TEST_ASSERT_EQUAL_INT(0, ws_json_array_init(&builder));
     ws_json_array_add(&builder, "{\"a\":1}");
     ws_json_array_end(&builder);
     TEST_ASSERT_EQUAL_STRING("[{\"a\":1}]", ws_json_array_get(&builder));
+    ws_json_array_free(&builder);
 }
 
 void test_json_array_multiple_items(void) {
-    char buffer[256];
     ws_json_array_builder_t builder;
-    ws_json_array_init(&builder, buffer, sizeof(buffer));
+    TEST_ASSERT_EQUAL_INT(0, ws_json_array_init(&builder));
     ws_json_array_add(&builder, "1");
     ws_json_array_add(&builder, "2");
     ws_json_array_add(&builder, "3");
     ws_json_array_end(&builder);
     TEST_ASSERT_EQUAL_STRING("[1,2,3]", ws_json_array_get(&builder));
+    ws_json_array_free(&builder);
+}
+
+/* The point of the rewrite: no caller has to guess a capacity up front. */
+void test_json_array_grows_past_initial_capacity(void) {
+    ws_json_array_builder_t builder;
+    char item[512];
+    const char *out;
+    int i;
+
+    memset(item, 'x', sizeof(item));
+    item[0] = '"';
+    item[sizeof(item) - 2] = '"';
+    item[sizeof(item) - 1] = 0;
+
+    TEST_ASSERT_EQUAL_INT(0, ws_json_array_init(&builder));
+    /* 64 items of ~511 bytes is far beyond the initial 4096. */
+    for (i = 0; i < 64; i++) {
+        ws_json_array_add(&builder, item);
+    }
+    ws_json_array_end(&builder);
+
+    out = ws_json_array_get(&builder);
+    TEST_ASSERT_NOT_NULL(out);
+    TEST_ASSERT_EQUAL_INT('[', out[0]);
+    TEST_ASSERT_EQUAL_INT(']', out[strlen(out) - 1]);
+    TEST_ASSERT_EQUAL_INT(64, builder.item_count);
+    TEST_ASSERT_EQUAL_INT(63, (int)count_char(out, ','));
+    ws_json_array_free(&builder);
+}
+
+void test_json_array_free_is_idempotent(void) {
+    ws_json_array_builder_t builder;
+    TEST_ASSERT_EQUAL_INT(0, ws_json_array_init(&builder));
+    ws_json_array_add(&builder, "1");
+    ws_json_array_free(&builder);
+    ws_json_array_free(&builder);
+    TEST_ASSERT_NULL(builder.buffer);
 }
 
 /* ========== Config Builder Tests ========== */
@@ -1373,6 +1419,8 @@ int main(void) {
     RUN_TEST(test_json_array_empty);
     RUN_TEST(test_json_array_single_item);
     RUN_TEST(test_json_array_multiple_items);
+    RUN_TEST(test_json_array_grows_past_initial_capacity);
+    RUN_TEST(test_json_array_free_is_idempotent);
     
     /* Config Builder tests */
     RUN_TEST(test_config_base_with_version);
