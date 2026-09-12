@@ -1,3 +1,10 @@
 #!/usr/bin/make -f
 %:
 	dh $@
+
+# ws-emit is the first executable this source ships, so dh_strip now wants to
+# split out a -dbgsym package. The Makefile sets CFLAGS itself rather than
+# appending to dpkg-buildflags, so the binary carries no debug info and that
+# package would be empty. The sensor drivers all skip it the same way.
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym

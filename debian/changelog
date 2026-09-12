@@ -10,6 +10,11 @@ libwildlifesystems (1.3.0) stable; urgency=medium
     so moving and re-surveying a node does not retrospectively relocate its own
     history. Where the node has no usable location the token is emitted
     unresolved, keeping the declaration rather than discarding it
+  * Skip automatic -dbgsym generation, as the sensor drivers already do.
+    ws-emit is the first executable this source ships, so dh_strip began
+    producing a debug package that lintian reported as having no debug symbols:
+    the Makefile sets CFLAGS itself rather than appending to dpkg-buildflags, so
+    the binary carries none
   * Add ws-emit, in a new wildlifesystems-tools binary package: a command that
     turns readings described on its command line into reading JSON using this
     library. It lets sensor-onboard, which is shell, emit exactly what the C
