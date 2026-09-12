@@ -791,6 +791,131 @@ void test_read_file_not_found(void) {
     TEST_ASSERT_NULL(content);
 }
 
+/* Counts non-overlapping occurrences of needle in haystack. */
+static size_t count_occurrences(const char *haystack, const char *needle) {
+    size_t n = 0;
+    size_t len = strlen(needle);
+    const char *p = haystack;
+    while ((p = strstr(p, needle)) != NULL) {
+        n++;
+        p += len;
+    }
+    return n;
+}
+
+/* ========== Boot Configuration Tests ========== */
+
+/* Writes a boot config and points the library at it. */
+static const char *write_boot_config(const char *body) {
+    static char path[] = "test_boot_config.txt";
+    FILE *fp = fopen(path, "w");
+    if (!fp) return NULL;
+    fputs(body, fp);
+    fclose(fp);
+    setenv("WS_BOOT_CONFIG_FILE", path, 1);
+    return path;
+}
+
+void test_boot_config_path_honours_override(void) {
+    const char *path = write_boot_config("# empty\n");
+    TEST_ASSERT_NOT_NULL(path);
+    TEST_ASSERT_EQUAL_STRING(path, ws_boot_config_path());
+    unsetenv("WS_BOOT_CONFIG_FILE");
+    remove(path);
+}
+
+void test_boot_config_has_finds_directive(void) {
+    const char *path = write_boot_config("dtparam=audio=on\n"
+                                         "dtoverlay=w1-gpio,gpiopin=17,pullup=1\n");
+    TEST_ASSERT_NOT_NULL(path);
+    /* A prefix match, so the parameters do not have to be guessed. */
+    TEST_ASSERT_EQUAL_INT(1, ws_boot_config_has(path, "dtoverlay=w1-gpio"));
+    TEST_ASSERT_EQUAL_INT(0, ws_boot_config_has(path, "dtparam=i2c_arm"));
+    unsetenv("WS_BOOT_CONFIG_FILE");
+    remove(path);
+}
+
+/* A commented-out directive is not enabled, however it is indented. */
+void test_boot_config_has_skips_comments(void) {
+    const char *path = write_boot_config("# dtoverlay=w1-gpio\n"
+                                         "   \t# dtparam=i2c_arm=on\n");
+    TEST_ASSERT_NOT_NULL(path);
+    TEST_ASSERT_EQUAL_INT(0, ws_boot_config_has(path, "dtoverlay=w1-gpio"));
+    TEST_ASSERT_EQUAL_INT(0, ws_boot_config_has(path, "dtparam=i2c_arm"));
+    unsetenv("WS_BOOT_CONFIG_FILE");
+    remove(path);
+}
+
+void test_boot_config_has_ignores_leading_whitespace(void) {
+    const char *path = write_boot_config("  \tdtparam=i2c_arm=on\n");
+    TEST_ASSERT_NOT_NULL(path);
+    TEST_ASSERT_EQUAL_INT(1, ws_boot_config_has(path, "dtparam=i2c_arm"));
+    unsetenv("WS_BOOT_CONFIG_FILE");
+    remove(path);
+}
+
+void test_boot_config_has_missing_file(void) {
+    TEST_ASSERT_EQUAL_INT(-1, ws_boot_config_has("/nonexistent/config.txt", "x"));
+}
+
+/* A file with no [all] gains one, so the directive is not confined to a
+   model-specific section that happens to be last. */
+void test_boot_config_add_creates_all_section(void) {
+    const char *path = write_boot_config("[pi4]\ndtparam=audio=on\n");
+    char *body;
+    TEST_ASSERT_NOT_NULL(path);
+
+    TEST_ASSERT_EQUAL_INT(0, ws_boot_config_add(path, "dtparam=i2c_arm=on", "I2C"));
+
+    body = ws_read_file(path, NULL);
+    TEST_ASSERT_NOT_NULL(body);
+    TEST_ASSERT_NOT_NULL(strstr(body, "[all]"));
+    TEST_ASSERT_NOT_NULL(strstr(body, "# I2C"));
+    TEST_ASSERT_NOT_NULL(strstr(body, "dtparam=i2c_arm=on"));
+    /* And it is now findable. */
+    TEST_ASSERT_EQUAL_INT(1, ws_boot_config_has(path, "dtparam=i2c_arm"));
+    free(body);
+    unsetenv("WS_BOOT_CONFIG_FILE");
+    remove(path);
+}
+
+void test_boot_config_add_reuses_existing_all_section(void) {
+    const char *path = write_boot_config("[all]\ndtparam=audio=on\n");
+    char *body;
+    TEST_ASSERT_NOT_NULL(path);
+
+    TEST_ASSERT_EQUAL_INT(0, ws_boot_config_add(path, "dtparam=i2c_arm=on", NULL));
+
+    body = ws_read_file(path, NULL);
+    TEST_ASSERT_NOT_NULL(body);
+    TEST_ASSERT_EQUAL_INT(1, (int)count_occurrences(body, "[all]"));
+    free(body);
+    unsetenv("WS_BOOT_CONFIG_FILE");
+    remove(path);
+}
+
+/* The whole "enable" command: adds on the first run, reports on the second. */
+void test_enable_boot_config_is_idempotent(void) {
+    const char *path = write_boot_config("[all]\n");
+    char *body;
+    TEST_ASSERT_NOT_NULL(path);
+
+    TEST_ASSERT_EQUAL_INT(WS_EXIT_SUCCESS,
+        ws_cmd_enable_boot_config("dtparam=i2c_arm=on", "dtparam=i2c_arm",
+                                  "I2C interface", "test"));
+    TEST_ASSERT_EQUAL_INT(WS_EXIT_SUCCESS,
+        ws_cmd_enable_boot_config("dtparam=i2c_arm=on", "dtparam=i2c_arm",
+                                  "I2C interface", "test"));
+
+    body = ws_read_file(path, NULL);
+    TEST_ASSERT_NOT_NULL(body);
+    /* Added once, not twice. */
+    TEST_ASSERT_EQUAL_INT(1, (int)count_occurrences(body, "dtparam=i2c_arm=on"));
+    free(body);
+    unsetenv("WS_BOOT_CONFIG_FILE");
+    remove(path);
+}
+
 /* ========== Unit canonicalisation Tests ========== */
 
 void test_unit_canonical_exact(void) {
@@ -1368,6 +1493,16 @@ int main(void) {
     RUN_TEST(test_read_file_with_size);
     RUN_TEST(test_read_file_not_found);
     
+    /* Boot configuration tests */
+    RUN_TEST(test_boot_config_path_honours_override);
+    RUN_TEST(test_boot_config_has_finds_directive);
+    RUN_TEST(test_boot_config_has_skips_comments);
+    RUN_TEST(test_boot_config_has_ignores_leading_whitespace);
+    RUN_TEST(test_boot_config_has_missing_file);
+    RUN_TEST(test_boot_config_add_creates_all_section);
+    RUN_TEST(test_boot_config_add_reuses_existing_all_section);
+    RUN_TEST(test_enable_boot_config_is_idempotent);
+
     /* Unit canonicalisation tests */
     RUN_TEST(test_unit_canonical_exact);
     RUN_TEST(test_unit_canonical_ignores_case);

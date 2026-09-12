@@ -575,6 +575,75 @@ bool ws_config_iter_next(ws_config_iter_t *it, ws_sensor_config_base_t *base,
 void ws_config_iter_close(ws_config_iter_t *it);
 
 /* ============================================================================
+ * Raspberry Pi boot configuration
+ * ============================================================================
+ * Some sensors need a device-tree directive in the Pi boot config before the
+ * kernel will talk to them at all: a 1-Wire bus needs an overlay, I2C needs a
+ * dtparam. A driver's "enable" command is how that gets added.
+ *
+ * None of this is specific to one bus, so it lives here rather than in
+ * whichever driver happened to need it first.
+ */
+
+#define WS_BOOT_CONFIG_DEFAULT "/boot/firmware/config.txt"
+#define WS_BOOT_CONFIG_LEGACY  "/boot/config.txt"
+
+/*
+ * Locate the Pi boot config.
+ *
+ * Prefers /boot/firmware/config.txt, falling back to the pre-Bookworm
+ * /boot/config.txt. $WS_BOOT_CONFIG_FILE overrides both, which is how the tests
+ * exercise this without a Pi.
+ *
+ * @return  Path to an existing config, or NULL if neither is present
+ */
+const char *ws_boot_config_path(void);
+
+/*
+ * Is `directive` already present in the boot config?
+ *
+ * Leading whitespace is ignored and comments are skipped. Matching is a prefix
+ * match from the start of the directive, so "dtoverlay=w1-gpio" matches
+ * "dtoverlay=w1-gpio,gpiopin=17,pullup=1" and a driver can tell its bus is
+ * enabled whatever parameters someone gave it.
+ *
+ * @param path       Boot config to read
+ * @param directive  Directive, or the leading part of one, to look for
+ * @return           1 if present, 0 if absent, -1 if the file cannot be read
+ */
+int ws_boot_config_has(const char *path, const char *directive);
+
+/*
+ * Append `directive` to the boot config, under [all].
+ *
+ * A directive following a model-specific section such as [pi4] applies only to
+ * that model, so an [all] section is added first if the file has none.
+ *
+ * @param path       Boot config to append to
+ * @param directive  Directive to add
+ * @param comment    Comment to precede it with, or NULL for none
+ * @return           0 on success, -1 if the file cannot be written
+ */
+int ws_boot_config_add(const char *path, const char *directive, const char *comment);
+
+/*
+ * Implement a driver's "enable" command.
+ *
+ * Finds the boot config, reports if the directive is already present, otherwise
+ * adds it and says a reboot is needed. This is the whole of "enable" for a
+ * driver whose hardware needs a boot directive.
+ *
+ * @param directive  Directive to ensure, e.g. "dtparam=i2c_arm=on"
+ * @param match      Prefix identifying it, e.g. "dtparam=i2c_arm", or NULL to
+ *                   match the whole directive
+ * @param what       Name used in the messages, e.g. "I2C interface"
+ * @param added_by   Driver name, for the comment left in the file
+ * @return           WS_EXIT_SUCCESS, or WS_EXIT_INVALID_ARG on failure
+ */
+int ws_cmd_enable_boot_config(const char *directive, const char *match,
+                              const char *what, const char *added_by);
+
+/* ============================================================================
  * JSON Output Builder
  * ============================================================================
  * Helper functions to build JSON output strings incrementally.

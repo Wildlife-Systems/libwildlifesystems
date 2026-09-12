@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <unistd.h>
 #include <strings.h>   /* strcasecmp, for ws_unit_canonical */
 #include <time.h>
 #include <syslog.h>
@@ -924,6 +926,128 @@ char *ws_location_json(const ws_location_t *loc) {
         default:
             return NULL;
     }
+}
+
+/* ============================================================================
+ * Raspberry Pi Boot Configuration
+ * ============================================================================ */
+
+const char *ws_boot_config_path(void) {
+    const char *override = getenv("WS_BOOT_CONFIG_FILE");
+
+    if (override && *override) return override;
+    if (access(WS_BOOT_CONFIG_DEFAULT, F_OK) == 0) return WS_BOOT_CONFIG_DEFAULT;
+    if (access(WS_BOOT_CONFIG_LEGACY, F_OK) == 0) return WS_BOOT_CONFIG_LEGACY;
+    return NULL;
+}
+
+int ws_boot_config_has(const char *path, const char *directive) {
+    FILE *fp;
+    char line[512];
+    size_t len;
+
+    if (!path || !directive || !*directive) return -1;
+
+    fp = fopen(path, "r");
+    if (!fp) return -1;
+
+    len = strlen(directive);
+    while (fgets(line, sizeof(line), fp)) {
+        char *p = line;
+
+        /* isspace() takes a value representable as unsigned char, and a plain
+           char is signed on x86, so a byte above 0x7f in a comment would
+           otherwise be undefined. */
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        if (*p == '#' || *p == '\0' || *p == '\n') continue;
+
+        if (strncmp(p, directive, len) == 0) {
+            fclose(fp);
+            return 1;
+        }
+    }
+
+    fclose(fp);
+    return 0;
+}
+
+int ws_boot_config_add(const char *path, const char *directive, const char *comment) {
+    FILE *fp;
+    char line[512];
+    int has_all = 0;
+
+    if (!path || !directive || !*directive) return -1;
+
+    fp = fopen(path, "r");
+    if (fp) {
+        while (fgets(line, sizeof(line), fp)) {
+            char *p = line;
+            while (*p && isspace((unsigned char)*p)) p++;
+            if (strncmp(p, "[all]", 5) == 0) {
+                has_all = 1;
+                break;
+            }
+        }
+        fclose(fp);
+    }
+
+    fp = fopen(path, "a");
+    if (!fp) return -1;
+
+    /* A directive after a model section such as [pi4] applies to that model
+       alone, so make sure this one lands where it applies everywhere. */
+    if (!has_all) {
+        fprintf(fp, "\n[all]\n");
+    }
+    if (comment && *comment) {
+        fprintf(fp, "# %s\n", comment);
+    }
+    fprintf(fp, "%s\n", directive);
+
+    if (fclose(fp) != 0) return -1;
+    return 0;
+}
+
+int ws_cmd_enable_boot_config(const char *directive, const char *match,
+                              const char *what, const char *added_by) {
+    const char *path;
+    char comment[256];
+    int status;
+
+    if (!directive || !what) return WS_EXIT_INVALID_ARG;
+
+    path = ws_boot_config_path();
+    if (!path) {
+        ws_log_error("Could not find config.txt at %s or %s",
+                     WS_BOOT_CONFIG_DEFAULT, WS_BOOT_CONFIG_LEGACY);
+        return WS_EXIT_INVALID_ARG;
+    }
+
+    status = ws_boot_config_has(path, match ? match : directive);
+    if (status == 1) {
+        printf("%s is already enabled in %s\n", what, path);
+        printf("If sensors are not detected, please reboot the system.\n");
+        return WS_EXIT_SUCCESS;
+    }
+    if (status == -1) {
+        ws_log_error("Could not read %s (permission denied?)", path);
+        return WS_EXIT_INVALID_ARG;
+    }
+
+    snprintf(comment, sizeof(comment), "%s (added by %s)", what,
+             added_by ? added_by : "WildlifeSystems");
+
+    if (ws_boot_config_add(path, directive, comment) != 0) {
+        ws_log_error("Could not write to %s (need root?)", path);
+        return WS_EXIT_INVALID_ARG;
+    }
+
+    printf("%s enabled in %s\n", what, path);
+    printf("\n*** REBOOT REQUIRED ***\n");
+    printf("Please reboot the system for changes to take effect:\n");
+    printf("  sudo reboot\n\n");
+    return WS_EXIT_SUCCESS;
 }
 
 /* ============================================================================

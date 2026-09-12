@@ -10,6 +10,18 @@ libwildlifesystems (1.3.0) stable; urgency=medium
     so moving and re-surveying a node does not retrospectively relocate its own
     history. Where the node has no usable location the token is emitted
     unresolved, keeping the declaration rather than discarding it
+  * Add ws_boot_config_path, ws_boot_config_has, ws_boot_config_add and
+    ws_cmd_enable_boot_config. Editing the Pi boot config is how a driver's
+    "enable" command makes its bus usable, and none of it is specific to one
+    bus, but it lived in sensor-w1therm because 1-Wire needed it first.
+    Directives are matched by prefix so a bus counts as enabled whatever
+    parameters it was given, and an [all] section is added when the file has
+    none, since a directive after a section such as [pi4] would apply to that
+    model alone. $WS_BOOT_CONFIG_FILE overrides the path, which is how the tests
+    cover this without a Pi
+  * The boot config scan passes isspace() a value cast to unsigned char. A plain
+    char is signed on some platforms, so a byte above 0x7f in a comment was
+    undefined behaviour; harmless on the Pi, where char is unsigned
   * The JSON array builder now owns a heap buffer and grows it, rather than
     writing into a caller-supplied fixed one. Nothing used the fixed-buffer
     form, while every driver open-coded the same realloc-and-strcat loop, which
