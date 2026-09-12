@@ -476,7 +476,10 @@ char *ws_get_serial_number(void) {
     size_t line_len = 0;
     char *result = NULL;
     
-    fp = fopen("/proc/cpuinfo", "r");
+    const char *path = getenv("WS_CPUINFO_FILE");
+    if (!path || !*path) path = "/proc/cpuinfo";
+
+    fp = fopen(path, "r");
     if (!fp) {
         return NULL;
     }
@@ -485,10 +488,21 @@ char *ws_get_serial_number(void) {
         if (strncmp(line, "Serial", 6) == 0) {
             char *colon = strchr(line, ':');
             if (colon) {
+                char *end;
                 colon++;
                 while (*colon == ' ' || *colon == '\t') colon++;
-                char *nl = strchr(colon, '\n');
-                if (nl) *nl = '\0';
+                /* Trim trailing whitespace, not just the newline. "pi-data
+                   serial" extracts the same field with a non-space match, so a
+                   line with a trailing space or CR would otherwise give the two
+                   different answers - and the sensor_id prefix built from this
+                   would stop matching the node_id that sr takes from pi-data. */
+                end = colon + strlen(colon);
+                while (end > colon &&
+                       (end[-1] == '\n' || end[-1] == '\r' ||
+                        end[-1] == ' '  || end[-1] == '\t')) {
+                    end--;
+                }
+                *end = '\0';
                 result = strdup(colon);
                 break;
             }
@@ -909,22 +923,54 @@ int ws_read_geolocation(ws_geolocation_t *out) {
 /*
  * Render a node location as a GeoJSON Point.
  */
-char *ws_geolocation_geojson(const ws_geolocation_t *g) {
-    char buf[256];
-
-    if (!g || !g->valid) return NULL;
+/*
+ * Render a position as GeoJSON.
+ *
+ * Always a Feature, so every position a consumer meets has the same shape:
+ * GeoJSON coordinates carry position only, and an accuracy radius has to live
+ * in properties. Where none was surveyed, properties.accuracy is null rather
+ * than absent, matching how the reading template states every field it knows
+ * about whether or not it has a value.
+ *
+ * Shared by the node location and a sensor's own, which must agree.
+ */
+static char *geojson_position(double longitude, double latitude,
+                              bool has_altitude, double altitude,
+                              bool has_accuracy, double accuracy) {
+    char point[128];
+    char accuracy_json[32];
+    char buf[512];
 
     /* GeoJSON is [longitude, latitude], in that order. */
-    if (g->has_altitude) {
-        snprintf(buf, sizeof(buf),
+    if (has_altitude) {
+        snprintf(point, sizeof(point),
                  "{\"type\":\"Point\",\"coordinates\":[%.6f,%.6f,%.2f]}",
-                 g->longitude, g->latitude, g->altitude);
+                 longitude, latitude, altitude);
     } else {
-        snprintf(buf, sizeof(buf),
+        snprintf(point, sizeof(point),
                  "{\"type\":\"Point\",\"coordinates\":[%.6f,%.6f]}",
-                 g->longitude, g->latitude);
+                 longitude, latitude);
     }
+
+    if (has_accuracy) {
+        snprintf(accuracy_json, sizeof(accuracy_json), "%.2f", accuracy);
+    } else {
+        snprintf(accuracy_json, sizeof(accuracy_json), "null");
+    }
+
+    snprintf(buf, sizeof(buf),
+             "{\"type\":\"Feature\",\"geometry\":%s,"
+             "\"properties\":{\"accuracy\":%s}}",
+             point, accuracy_json);
     return strdup(buf);
+}
+
+char *ws_geolocation_geojson(const ws_geolocation_t *g) {
+    if (!g || !g->valid) return NULL;
+
+    return geojson_position(g->longitude, g->latitude,
+                            g->has_altitude, g->altitude,
+                            g->has_accuracy, g->accuracy);
 }
 
 /* ============================================================================
@@ -1018,8 +1064,6 @@ int ws_parse_sensor_location(const char *ptr, const char *end, ws_location_t *ou
  * Render a location as the JSON value for a reading's "location" field.
  */
 char *ws_location_json(const ws_location_t *loc) {
-    char buf[256];
-
     if (!loc) return NULL;
 
     switch (loc->source) {
@@ -1042,17 +1086,9 @@ char *ws_location_json(const ws_location_t *loc) {
             return strdup("\"{{none}}\"");
 
         case WS_LOC_EXPLICIT:
-            /* GeoJSON is [longitude, latitude], in that order. */
-            if (loc->has_altitude) {
-                snprintf(buf, sizeof(buf),
-                         "{\"type\":\"Point\",\"coordinates\":[%.6f,%.6f,%.2f]}",
-                         loc->longitude, loc->latitude, loc->altitude);
-            } else {
-                snprintf(buf, sizeof(buf),
-                         "{\"type\":\"Point\",\"coordinates\":[%.6f,%.6f]}",
-                         loc->longitude, loc->latitude);
-            }
-            return strdup(buf);
+            return geojson_position(loc->longitude, loc->latitude,
+                                    loc->has_altitude, loc->altitude,
+                                    loc->has_accuracy, loc->accuracy);
 
         case WS_LOC_UNDECLARED:
         default:

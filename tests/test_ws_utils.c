@@ -441,7 +441,10 @@ void test_replace_null_raw_not_null(void) {
 void test_replace_null_raw_too_long_refused(void) {
     char json[32] = "{\"location\":null}";
     ws_json_replace_null_raw(json, sizeof(json), "location",
-                             "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700,12.00]}");
+                             "{\"type\":\"Feature\","
+        "\"geometry\":{\"type\":\"Point\","
+        "\"coordinates\":[-0.176400,51.496700,12.00]},"
+        "\"properties\":{\"accuracy\":null}}");
     TEST_ASSERT_EQUAL_STRING("{\"location\":null}", json);
 }
 
@@ -464,6 +467,72 @@ static ws_geolocation_t read_geo(const char *content) {
     unsetenv("GEOLOC_FILE");
     return g;
 }
+
+/* ========== Serial Number Tests ========== */
+
+/* The serial must come out exactly as "pi-data serial" would report it: sr
+   takes node_id from pi-data while the drivers build sensor_id from this, so
+   a disagreement leaves a reading whose sensor_id prefix does not match its
+   own node_id. */
+static char *serial_from(const char *cpuinfo) {
+    char *s;
+    write_file(cpuinfo);
+    setenv("WS_CPUINFO_FILE", temp_file_path, 1);
+    s = ws_get_serial_number();
+    unsetenv("WS_CPUINFO_FILE");
+    return s;
+}
+
+void test_serial_tab_separated(void) {
+    /* The real Raspberry Pi layout. */
+    char *s = serial_from("processor\t: 0\nSerial\t\t: 100000008e6abb40\n");
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT_EQUAL_STRING("100000008e6abb40", s);
+    free(s);
+}
+
+void test_serial_trailing_space(void) {
+    char *s = serial_from("Serial\t\t: 100000008e6abb40   \n");
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT_EQUAL_STRING("100000008e6abb40", s);
+    free(s);
+}
+
+void test_serial_crlf(void) {
+    char *s = serial_from("Serial\t\t: 100000008e6abb40\r\n");
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT_EQUAL_STRING("100000008e6abb40", s);
+    free(s);
+}
+
+void test_serial_space_before_colon(void) {
+    char *s = serial_from("Serial : 100000008e6abb40\n");
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT_EQUAL_STRING("100000008e6abb40", s);
+    free(s);
+}
+
+void test_serial_no_trailing_newline(void) {
+    char *s = serial_from("Serial\t\t: 100000008e6abb40");
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT_EQUAL_STRING("100000008e6abb40", s);
+    free(s);
+}
+
+void test_serial_absent(void) {
+    char *s = serial_from("processor\t: 0\nmodel name\t: ARMv8\n");
+    TEST_ASSERT_NULL(s);
+}
+
+void test_serial_missing_file(void) {
+    char *s;
+    setenv("WS_CPUINFO_FILE", "/nonexistent/ws-test-cpuinfo", 1);
+    s = ws_get_serial_number();
+    unsetenv("WS_CPUINFO_FILE");
+    TEST_ASSERT_NULL(s);
+}
+
+/* ========== Node Geolocation Tests ========== */
 
 void test_geo_full_four_values(void) {
     ws_geolocation_t g = read_geo("51.4967\n-0.1764\n12.0\n5.0\n");
@@ -597,7 +666,10 @@ void test_geo_geojson_lon_lat_order(void) {
     char *j = ws_geolocation_geojson(&g);
     TEST_ASSERT_NOT_NULL(j);
     TEST_ASSERT_EQUAL_STRING(
-        "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700,12.00]}", j);
+        "{\"type\":\"Feature\","
+        "\"geometry\":{\"type\":\"Point\","
+        "\"coordinates\":[-0.176400,51.496700,12.00]},"
+        "\"properties\":{\"accuracy\":null}}", j);
     free(j);
 }
 
@@ -606,7 +678,9 @@ void test_geo_geojson_no_altitude(void) {
     char *j = ws_geolocation_geojson(&g);
     TEST_ASSERT_NOT_NULL(j);
     TEST_ASSERT_EQUAL_STRING(
-        "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700]}", j);
+        "{\"type\":\"Feature\","
+        "\"geometry\":{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700]},"
+        "\"properties\":{\"accuracy\":null}}", j);
     free(j);
 }
 
@@ -632,7 +706,10 @@ void test_location_json_node_resolves(void) {
 
     TEST_ASSERT_NOT_NULL(j);
     TEST_ASSERT_EQUAL_STRING(
-        "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700,12.00]}", j);
+        "{\"type\":\"Feature\","
+        "\"geometry\":{\"type\":\"Point\","
+        "\"coordinates\":[-0.176400,51.496700,12.00]},"
+        "\"properties\":{\"accuracy\":null}}", j);
     free(j);
 }
 
@@ -785,7 +862,9 @@ void test_location_json_explicit_lon_lat_order(void) {
     char *j = ws_location_json(&l);
     TEST_ASSERT_NOT_NULL(j);
     TEST_ASSERT_EQUAL_STRING(
-        "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700]}", j);
+        "{\"type\":\"Feature\","
+        "\"geometry\":{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700]},"
+        "\"properties\":{\"accuracy\":null}}", j);
     free(j);
 }
 
@@ -796,7 +875,84 @@ void test_location_json_explicit_with_altitude(void) {
     char *j = ws_location_json(&l);
     TEST_ASSERT_NOT_NULL(j);
     TEST_ASSERT_EQUAL_STRING(
-        "{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700,12.00]}", j);
+        "{\"type\":\"Feature\","
+        "\"geometry\":{\"type\":\"Point\","
+        "\"coordinates\":[-0.176400,51.496700,12.00]},"
+        "\"properties\":{\"accuracy\":null}}", j);
+    free(j);
+}
+
+/* A surveyed accuracy has nowhere to live in a Point, so the position becomes a
+   Feature carrying it. Without one, the output is unchanged. */
+void test_location_json_accuracy_becomes_a_feature(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":51.496700,\"longitude\":-0.176400,"
+        "\"accuracy\":2.0}}");
+    char *j = ws_location_json(&l);
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"Feature\","
+        "\"geometry\":{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700]},"
+        "\"properties\":{\"accuracy\":2.00}}", j);
+    free(j);
+}
+
+void test_location_json_accuracy_with_altitude(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":51.496700,\"longitude\":-0.176400,"
+        "\"altitude\":11.85,\"accuracy\":2.5}}");
+    char *j = ws_location_json(&l);
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"Feature\","
+        "\"geometry\":{\"type\":\"Point\","
+        "\"coordinates\":[-0.176400,51.496700,11.85]},"
+        "\"properties\":{\"accuracy\":2.50}}", j);
+    free(j);
+}
+
+/* Zero is a legitimate accuracy, not an absent one. */
+void test_location_json_zero_accuracy_is_emitted(void) {
+    ws_location_t l = parse_loc(
+        "{\"location\":{\"latitude\":0,\"longitude\":0,\"accuracy\":0}}");
+    char *j = ws_location_json(&l);
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_NOT_NULL(strstr(j, "\"properties\":{\"accuracy\":0.00}"));
+    free(j);
+}
+
+/* The node's own position takes the same shape, the two having to agree. */
+void test_geolocation_json_accuracy_becomes_a_feature(void) {
+    ws_geolocation_t g = read_geo("51.4967\n-0.1764\n12.0\n5.0\n");
+    char *j;
+
+    TEST_ASSERT_TRUE(g.valid);
+    TEST_ASSERT_TRUE(g.has_accuracy);
+
+    j = ws_geolocation_geojson(&g);
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"Feature\","
+        "\"geometry\":{\"type\":\"Point\","
+        "\"coordinates\":[-0.176400,51.496700,12.00]},"
+        "\"properties\":{\"accuracy\":5.00}}", j);
+    free(j);
+}
+
+/* No accuracy surveyed: still a Feature, with a null accuracy. */
+void test_geolocation_json_without_accuracy_is_null(void) {
+    ws_geolocation_t g = read_geo("51.4967\n-0.1764\n");
+    char *j;
+
+    TEST_ASSERT_TRUE(g.valid);
+    TEST_ASSERT_FALSE(g.has_accuracy);
+
+    j = ws_geolocation_geojson(&g);
+    TEST_ASSERT_NOT_NULL(j);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"Feature\","
+        "\"geometry\":{\"type\":\"Point\",\"coordinates\":[-0.176400,51.496700]},"
+        "\"properties\":{\"accuracy\":null}}", j);
     free(j);
 }
 
@@ -1500,6 +1656,14 @@ int main(void) {
     RUN_TEST(test_replace_null_raw_too_long_refused);
     RUN_TEST(test_set_config_still_works);
 
+    RUN_TEST(test_serial_tab_separated);
+    RUN_TEST(test_serial_trailing_space);
+    RUN_TEST(test_serial_crlf);
+    RUN_TEST(test_serial_space_before_colon);
+    RUN_TEST(test_serial_no_trailing_newline);
+    RUN_TEST(test_serial_absent);
+    RUN_TEST(test_serial_missing_file);
+
     RUN_TEST(test_geo_full_four_values);
     RUN_TEST(test_geo_comments_and_whitespace);
     RUN_TEST(test_geo_crlf);
@@ -1540,6 +1704,11 @@ int main(void) {
     RUN_TEST(test_location_json_undeclared_is_null);
     RUN_TEST(test_location_json_explicit_lon_lat_order);
     RUN_TEST(test_location_json_explicit_with_altitude);
+    RUN_TEST(test_location_json_accuracy_becomes_a_feature);
+    RUN_TEST(test_location_json_accuracy_with_altitude);
+    RUN_TEST(test_location_json_zero_accuracy_is_emitted);
+    RUN_TEST(test_geolocation_json_accuracy_becomes_a_feature);
+    RUN_TEST(test_geolocation_json_without_accuracy_is_null);
     RUN_TEST(test_location_json_null_input);
 
     RUN_TEST(test_read_file_success);

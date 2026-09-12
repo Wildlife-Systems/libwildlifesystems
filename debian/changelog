@@ -1,5 +1,20 @@
 libwildlifesystems (1.3.0) stable; urgency=medium
 
+  * A surveyed accuracy is now emitted rather than discarded. It was read from
+    both /etc/geolocation and a sensor's location config, validated, and stored,
+    and then never rendered: a GeoJSON Point has nowhere to put it. A position is
+    now a GeoJSON Feature wrapping that Point, with the accuracy radius in metres
+    as properties.accuracy. A position known to two metres and one known to fifty
+    are no longer indistinguishable
+  * Every position takes that one shape, whether or not an accuracy was
+    surveyed: properties.accuracy is null where none was, rather than the
+    Feature collapsing back to a bare Point, so a consumer parses one form. This
+    changes the location field of any reading that carries explicit coordinates
+    or resolves "{{node}}". The "{{node}}" and "{{none}}" tokens and a null
+    location are unaffected, each meaning something a position cannot express
+  * The node position and a sensor's own position are rendered by one function
+    rather than two copies of the same Point formatting, so the two cannot
+    disagree about coordinate order or precision
   * Add ws_read_geolocation and ws_geolocation_geojson, reading the node's own
     position from /etc/geolocation in the GeoClue static-source format. Honours
     $GEOLOC_FILE, tolerates inline comments, stray whitespace, CRLF and
@@ -91,6 +106,12 @@ libwildlifesystems (1.3.0) stable; urgency=medium
     unconfigured sensor is distinguishable from one whose config was never
     read. Syslog only: it fires once per sensor per read cycle and would
     otherwise fill the per-driver stderr log
+  * ws_get_serial_number trims trailing whitespace, not just the newline, so it
+    agrees byte for byte with "pi-data serial" on any /proc/cpuinfo layout. sr
+    takes node_id from pi-data while the drivers build sensor_id from this, so a
+    disagreement would leave a reading whose sensor_id prefix did not match its
+    own node_id
+  * $WS_CPUINFO_FILE overrides the path, so the extraction is testable
 
  -- Ed Baker <edwbaker@gmail.com>  Sat, 12 Sep 2026 10:00:00 +0000
 

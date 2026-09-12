@@ -307,8 +307,15 @@ int ws_cmd_mock(const char *device, const char *serial_suffix,
 
 /*
  * Get Raspberry Pi serial number from /proc/cpuinfo.
- * Returns just the raw serial number without any suffix.
- * Returns dynamically allocated string, caller must free.
+ * Returns just the raw serial number without any suffix, with surrounding
+ * whitespace trimmed. Returns dynamically allocated string, caller must free.
+ *
+ * Must agree byte for byte with "pi-data serial", which reads the same line:
+ * sr takes node_id from pi-data while the drivers build sensor_id from this,
+ * so any disagreement would leave a reading whose sensor_id prefix does not
+ * match its own node_id.
+ *
+ * $WS_CPUINFO_FILE overrides the path, for testing.
  *
  * @return         Serial number string, or NULL on failure
  */
@@ -481,7 +488,14 @@ typedef struct {
 int ws_read_geolocation(ws_geolocation_t *out);
 
 /*
- * Render a node location as a GeoJSON Point.
+ * Render a node location as GeoJSON.
+ *
+ * A Feature wrapping a Point, carrying the accuracy radius in metres as
+ * properties.accuracy: a Point has nowhere to put it, and a surveyed radius is
+ * worth keeping, being the difference between a position known to a metre and
+ * one known to fifty. Always a Feature, and properties.accuracy is null rather
+ * than absent where none was surveyed, so every position has one shape.
+ *
  * NOTE: GeoJSON coordinate order is [longitude, latitude, altitude].
  *
  * @param g     Location to render
@@ -549,7 +563,10 @@ int ws_parse_sensor_location(const char *ptr, const char *end, ws_location_t *ou
  *                     when the node has no usable location, so the token can
  *                     still be resolved downstream rather than being lost.
  * WS_LOC_NONE       -> "\"{{none}}\""
- * WS_LOC_EXPLICIT   -> a GeoJSON Point, coordinates [lon, lat] or [lon, lat, alt]
+ * WS_LOC_EXPLICIT   -> GeoJSON: a Feature wrapping a Point whose coordinates
+ *                      are [lon, lat] or [lon, lat, alt], with the accuracy
+ *                      radius in metres as properties.accuracy, null where
+ *                      none was surveyed
  * WS_LOC_UNDECLARED -> NULL, so the caller leaves the field null
  *
  * @param loc   Location to render
